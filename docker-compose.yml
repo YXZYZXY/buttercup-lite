@@ -1,0 +1,309 @@
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+
+  api-server:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+    command: uvicorn apps.api_server.main:app --host 0.0.0.0 --port 8000
+    environment:
+      API_PORT: ${API_PORT:-8000}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      DATA_ROOT: ${DATA_ROOT:-/data/tasks}
+      QUEUE_BLOCK_TIMEOUT: ${QUEUE_BLOCK_TIMEOUT:-2}
+      SCHEDULER_READY_HOLD_SECONDS: ${SCHEDULER_READY_HOLD_SECONDS:-0}
+    ports:
+      - "${API_PORT:-8000}:8000"
+    volumes:
+      - ${PROJECT_ROOT:-.}/data:/data
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  downloader-worker:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+    command: python -m apps.workers.downloader_v2_main
+    environment:
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      DATA_ROOT: ${DATA_ROOT:-/data/tasks}
+      QUEUE_BLOCK_TIMEOUT: ${QUEUE_BLOCK_TIMEOUT:-2}
+      SCHEDULER_READY_HOLD_SECONDS: ${SCHEDULER_READY_HOLD_SECONDS:-0}
+    volumes:
+      - ${PROJECT_ROOT:-.}/data:/data
+      - ${HOST_HOME}:${HOST_HOME}:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  scheduler-worker:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+    command: python -m apps.workers.scheduler.main
+    environment:
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      DATA_ROOT: ${DATA_ROOT:-/data/tasks}
+      QUEUE_BLOCK_TIMEOUT: ${QUEUE_BLOCK_TIMEOUT:-2}
+      SCHEDULER_READY_HOLD_SECONDS: ${SCHEDULER_READY_HOLD_SECONDS:-0}
+    volumes:
+      - ${PROJECT_ROOT:-.}/data:/data
+      - ${HOST_HOME}:${HOST_HOME}:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  binary-analysis-worker:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+    command: python -m apps.workers.binary_analysis.main
+    environment:
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      DATA_ROOT: ${DATA_ROOT:-/data/tasks}
+      QUEUE_BLOCK_TIMEOUT: ${QUEUE_BLOCK_TIMEOUT:-2}
+      BINARY_DEFAULT_BACKEND: ${BINARY_DEFAULT_BACKEND:-auto}
+      BINARY_WRAPPER_TIMEOUT_SECONDS: ${BINARY_WRAPPER_TIMEOUT_SECONDS:-300}
+      IDA_MCP_COMMAND: ${IDA_MCP_COMMAND:-}
+      IDA_MCP_TIMEOUT_SECONDS: ${IDA_MCP_TIMEOUT_SECONDS:-1200}
+      BINARY_STRINGS_LIMIT: ${BINARY_STRINGS_LIMIT:-20000}
+      BINARY_FUNCTIONS_LIMIT: ${BINARY_FUNCTIONS_LIMIT:-20000}
+    volumes:
+      - ${PROJECT_ROOT:-.}/data:/data
+      - ${HOST_HOME}:${HOST_HOME}:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  binary-execution-worker:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+    command: python -m apps.workers.binary_execution.main
+    environment:
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      DATA_ROOT: ${DATA_ROOT:-/data/tasks}
+      QUEUE_BLOCK_TIMEOUT: ${QUEUE_BLOCK_TIMEOUT:-2}
+      BINARY_WRAPPER_TIMEOUT_SECONDS: ${BINARY_WRAPPER_TIMEOUT_SECONDS:-300}
+      SEED_IMPORT_SAMPLE_LIMIT: ${SEED_IMPORT_SAMPLE_LIMIT:-64}
+      FUZZ_IMPORTED_VALID_SEED_LIMIT: ${FUZZ_IMPORTED_VALID_SEED_LIMIT:-4}
+    volumes:
+      - ${PROJECT_ROOT:-.}/data:/data
+      - ${HOST_HOME}:${HOST_HOME}:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  binary-seed-worker:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+    command: python -m apps.workers.binary_seed.main
+    environment:
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      DATA_ROOT: ${DATA_ROOT:-/data/tasks}
+      QUEUE_BLOCK_TIMEOUT: ${QUEUE_BLOCK_TIMEOUT:-2}
+      LLM_ENABLED: ${LLM_ENABLED:-true}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.deepseek.com/v1}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-deepseek-chat}
+      LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-300}
+      LLM_MAX_RETRIES: ${LLM_MAX_RETRIES:-4}
+      LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0.35}
+      LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:-0}
+      SEED_FUNCTION_TIMEOUT_SECONDS: ${SEED_FUNCTION_TIMEOUT_SECONDS:-20}
+      SEED_MAX_BYTES: ${SEED_MAX_BYTES:-262144}
+      SEED_GENERATION_ATTEMPTS: ${SEED_GENERATION_ATTEMPTS:-6}
+    volumes:
+      - ${PROJECT_ROOT:-.}/data:/data
+      - ${HOST_HOME}:${HOST_HOME}:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  builder-worker:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+    command: python -m apps.workers.builder.main
+    environment:
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      DATA_ROOT: ${DATA_ROOT:-/data/tasks}
+      QUEUE_BLOCK_TIMEOUT: ${QUEUE_BLOCK_TIMEOUT:-2}
+      SCHEDULER_READY_HOLD_SECONDS: ${SCHEDULER_READY_HOLD_SECONDS:-0}
+      BUILD_TIMEOUT_SECONDS: ${BUILD_TIMEOUT_SECONDS:-1200}
+    volumes:
+      - ${PROJECT_ROOT:-.}/data:/data
+      - ${HOST_HOME}:${HOST_HOME}:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  seed-worker:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+    command: python -m apps.workers.seed.main
+    environment:
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      DATA_ROOT: ${DATA_ROOT:-/data/tasks}
+      QUEUE_BLOCK_TIMEOUT: ${QUEUE_BLOCK_TIMEOUT:-2}
+      SCHEDULER_READY_HOLD_SECONDS: ${SCHEDULER_READY_HOLD_SECONDS:-0}
+      LLM_ENABLED: ${LLM_ENABLED:-true}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.deepseek.com/v1}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-deepseek-chat}
+      LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-300}
+      LLM_MAX_RETRIES: ${LLM_MAX_RETRIES:-4}
+      LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0.35}
+      LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:-0}
+      SEED_FUNCTION_TIMEOUT_SECONDS: ${SEED_FUNCTION_TIMEOUT_SECONDS:-20}
+      SEED_MAX_BYTES: ${SEED_MAX_BYTES:-262144}
+      SEED_IMPORT_SAMPLE_LIMIT: ${SEED_IMPORT_SAMPLE_LIMIT:-64}
+      SEED_GENERATION_ATTEMPTS: ${SEED_GENERATION_ATTEMPTS:-6}
+    volumes:
+      - ${PROJECT_ROOT:-.}/data:/data
+      - ${HOST_HOME}:${HOST_HOME}:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  fuzzer-worker:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+    command: python -m apps.workers.fuzzer.main
+    environment:
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      DATA_ROOT: ${DATA_ROOT:-/data/tasks}
+      QUEUE_BLOCK_TIMEOUT: ${QUEUE_BLOCK_TIMEOUT:-2}
+      FUZZ_MAX_TOTAL_TIME_SECONDS: ${FUZZ_MAX_TOTAL_TIME_SECONDS:-180}
+      FUZZ_TIMEOUT_SECONDS: ${FUZZ_TIMEOUT_SECONDS:-10}
+      FUZZ_RSS_LIMIT_MB: ${FUZZ_RSS_LIMIT_MB:-2048}
+      FUZZ_MAX_LEN: ${FUZZ_MAX_LEN:-262144}
+      FUZZ_ABORT_ON_ERROR: ${FUZZ_ABORT_ON_ERROR:-false}
+      FUZZ_FORK_MODE: ${FUZZ_FORK_MODE:-true}
+      FUZZ_FORK_JOBS: ${FUZZ_FORK_JOBS:-1}
+      FUZZ_IGNORE_CRASHES: ${FUZZ_IGNORE_CRASHES:-true}
+      FUZZ_MAX_CRASHES_TO_TRACE: ${FUZZ_MAX_CRASHES_TO_TRACE:-50}
+      FUZZ_SEED_FROM_IMPORTED_VALID_CRASHES: ${FUZZ_SEED_FROM_IMPORTED_VALID_CRASHES:-true}
+      FUZZ_IMPORTED_VALID_SEED_LIMIT: ${FUZZ_IMPORTED_VALID_SEED_LIMIT:-4}
+      ALLOW_IMPORTED_CRASH_FALLBACK: ${ALLOW_IMPORTED_CRASH_FALLBACK:-false}
+      ALLOW_HARNESS_SWITCH: ${ALLOW_HARNESS_SWITCH:-false}
+      CRASH_SOURCE_POLICY: ${CRASH_SOURCE_POLICY:-live_raw_only}
+      REPLAY_TIMEOUT_SECONDS: ${REPLAY_TIMEOUT_SECONDS:-60}
+    volumes:
+      - ${PROJECT_ROOT:-.}/data:/data
+      - ${HOST_HOME}:${HOST_HOME}:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  tracer-worker:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+    command: python -m apps.workers.tracer.main
+    environment:
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      DATA_ROOT: ${DATA_ROOT:-/data/tasks}
+      QUEUE_BLOCK_TIMEOUT: ${QUEUE_BLOCK_TIMEOUT:-2}
+      ALLOW_HARNESS_SWITCH: ${ALLOW_HARNESS_SWITCH:-false}
+      CRASH_SOURCE_POLICY: ${CRASH_SOURCE_POLICY:-live_raw_only}
+      REPLAY_TIMEOUT_SECONDS: ${REPLAY_TIMEOUT_SECONDS:-60}
+    volumes:
+      - ${PROJECT_ROOT:-.}/data:/data
+      - ${HOST_HOME}:${HOST_HOME}:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  reproducer-worker:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+    command: python -m apps.workers.reproducer.main
+    environment:
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      DATA_ROOT: ${DATA_ROOT:-/data/tasks}
+      QUEUE_BLOCK_TIMEOUT: ${QUEUE_BLOCK_TIMEOUT:-2}
+      CRASH_SOURCE_POLICY: ${CRASH_SOURCE_POLICY:-live_raw_only}
+      REPLAY_TIMEOUT_SECONDS: ${REPLAY_TIMEOUT_SECONDS:-60}
+      REPRO_ATTEMPTS: ${REPRO_ATTEMPTS:-5}
+    volumes:
+      - ${PROJECT_ROOT:-.}/data:/data
+      - ${HOST_HOME}:${HOST_HOME}:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  protocol-execution-worker:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+    command: python -m apps.workers.protocol_execution_v2_main
+    environment:
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      DATA_ROOT: ${DATA_ROOT:-/data/tasks}
+      QUEUE_BLOCK_TIMEOUT: ${QUEUE_BLOCK_TIMEOUT:-2}
+      PROTO_BACKEND_ROOT: ${PROTO_BACKEND_ROOT:-/opt/proto-backend}
+      PROTO_BACKEND_TASK_JSON_NAME: ${PROTO_BACKEND_TASK_JSON_NAME:-protocol/task.json}
+    volumes:
+      - ${PROJECT_ROOT:-.}/data:/data
+      - ${PROTO_BACKEND_ROOT_HOST:-/home/buttercup2/protocol_seed/proto-fuzz-3dockers}:${PROTO_BACKEND_ROOT:-/opt/proto-backend}:ro
+      - ${HOST_HOME}:${HOST_HOME}:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  patch-worker:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+    command: python -m apps.workers.patch.main
+    environment:
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      DATA_ROOT: ${DATA_ROOT:-/data/tasks}
+      QUEUE_BLOCK_TIMEOUT: ${QUEUE_BLOCK_TIMEOUT:-2}
+      LLM_ENABLED: ${LLM_ENABLED:-true}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.deepseek.com/v1}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-deepseek-chat}
+      LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-300}
+      LLM_MAX_RETRIES: ${LLM_MAX_RETRIES:-4}
+      LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0.35}
+      LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:-0}
+    volumes:
+      - ${PROJECT_ROOT:-.}/data:/data
+      - ${HOST_HOME}:${HOST_HOME}:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  program-model-worker:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile
+    command: python -m apps.workers.program_model.main
+    environment:
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      DATA_ROOT: ${DATA_ROOT:-/data/tasks}
+      QUEUE_BLOCK_TIMEOUT: ${QUEUE_BLOCK_TIMEOUT:-2}
+      SCHEDULER_READY_HOLD_SECONDS: ${SCHEDULER_READY_HOLD_SECONDS:-0}
+    volumes:
+      - ${PROJECT_ROOT:-.}/data:/data
+      - ${HOST_HOME}:${HOST_HOME}:ro
+    depends_on:
+      redis:
+        condition: service_healthy

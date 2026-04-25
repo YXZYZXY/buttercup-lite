@@ -1,0 +1,40 @@
+{
+  "name": "binary_imported_cjson_fuzzer",
+  "priority": "P0",
+  "mode": "hybrid",
+  "adapter_type": "binary",
+  "binary_target_name": "cjson_read_fuzzer",
+  "binary_analysis_backend": "auto",
+  "profile": {
+    "BINARY_FUNCTIONS_LIMIT": 20000,
+    "BINARY_STRINGS_LIMIT": 20000
+  },
+  "binary": {
+    "local_path": "${PROJECT_ROOT}/data/tasks/d15e7148-1f38-4536-9487-d6346e07afb6/build/out/cjson_read_fuzzer",
+    "source_task_id": "d15e7148-1f38-4536-9487-d6346e07afb6",
+    "options_path": "${PROJECT_ROOT}/data/tasks/d15e7148-1f38-4536-9487-d6346e07afb6/build/out/cjson_read_fuzzer.options",
+    "dict_path": "${HOST_HOME}/Project/benchmarks/cjson-injected/fuzzing/json.dict"
+  },
+  "binary_execution": {
+    "input_mode": "file",
+    "input_delivery_reference": "fuzz_main.c",
+    "execution_strategy": "corpus-loop",
+    "argv_template": [
+      "{binary_path}",
+      "{input_path}"
+    ]
+  },
+  "source_context": {
+    "existing_src_path": "${HOST_HOME}/Project/benchmarks/cjson-injected",
+    "existing_harness_dir": "${HOST_HOME}/Project/benchmarks/cjson-injected/fuzzing"
+  },
+  "reused_assets": {
+    "existing_binary_path": "${PROJECT_ROOT}/data/tasks/d15e7148-1f38-4536-9487-d6346e07afb6/build/out/cjson_read_fuzzer",
+    "existing_seed_path": "${PROJECT_ROOT}/data/tasks/d15e7148-1f38-4536-9487-d6346e07afb6/seed/generated",
+    "existing_corpus_path": "${PROJECT_ROOT}/data/tasks/d15e7148-1f38-4536-9487-d6346e07afb6/corpus/active",
+    "existing_crashes_path": "${PROJECT_ROOT}/data/tasks/d15e7148-1f38-4536-9487-d6346e07afb6/crashes/raw",
+    "existing_harness_dir": "${HOST_HOME}/Project/benchmarks/cjson-injected/fuzzing",
+    "existing_dict_path": "${HOST_HOME}/Project/benchmarks/cjson-injected/fuzzing/json.dict",
+    "existing_options_path": "${PROJECT_ROOT}/data/tasks/d15e7148-1f38-4536-9487-d6346e07afb6/build/out/cjson_read_fuzzer.options"
+  }
+}

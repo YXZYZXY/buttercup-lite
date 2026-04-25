@@ -1,0 +1,60 @@
+{
+  "name": "h3_source",
+  "priority": "P0",
+  "mode": "hybrid",
+  "adapter_type": "ossfuzz",
+  "project": "h3",
+  "source": {
+    "adapter_type": "ossfuzz",
+    "uri": "file:///home/buttercup2/Project/fuzz_targets/h3",
+    "ref": null
+  },
+  "challenge_repo": {
+    "remote_url": "file:///home/buttercup2/Project/fuzz_targets/h3",
+    "branch": null,
+    "local_path": "${HOST_HOME}/Project/fuzz_targets/h3"
+  },
+  "fuzz_tooling": {
+    "remote_url": "https://github.com/google/oss-fuzz.git",
+    "branch": "master",
+    "project_name": "h3",
+    "local_project_path": "${HOST_HOME}/Project/oss-fuzz/oss-fuzz/projects/h3",
+    "local_project_yaml_path": "${HOST_HOME}/Project/oss-fuzz/oss-fuzz/projects/h3/project.yaml"
+  },
+  "expected_harness": "fuzzerCellArea",
+  "needs_import_assisted": false,
+  "profile": {
+    "FUZZ_MAX_TOTAL_TIME_SECONDS": 300,
+    "FUZZ_TIMEOUT_SECONDS": 10,
+    "FUZZ_MAX_LEN": 16384,
+    "SEED_MAX_BYTES": 16384,
+    "SEED_GENERATION_ATTEMPTS": 2,
+    "SEED_FUNCTION_TIMEOUT_SECONDS": 24,
+    "LLM_TEMPERATURE": 0.2
+  },
+  "metadata_template": {
+    "project": "h3",
+    "repo_first": true,
+    "repo_url": "file:///home/buttercup2/Project/fuzz_targets/h3",
+    "source_type": "git_repo",
+    "selected_oss_fuzz_project": "h3",
+    "existing_oss_fuzz_project_path": "${HOST_HOME}/Project/oss-fuzz/oss-fuzz/projects/h3",
+    "existing_project_yaml_path": "${HOST_HOME}/Project/oss-fuzz/oss-fuzz/projects/h3/project.yaml",
+    "source_resolution_class": "direct_oss_fuzz_project_reuse",
+    "selected_build_strategy": "oss_fuzz_build_assets",
+    "selected_harness_strategy": "oss_fuzz_harness_scan",
+    "FUZZ_LAUNCHER_PATH": "${PROJECT_ROOT}/scripts/glibc239_binary_launcher.sh",
+    "existing_launcher_path": "${PROJECT_ROOT}/scripts/glibc239_binary_launcher.sh"
+  },
+  "reused_assets": {
+    "existing_src_path": "${HOST_HOME}/Project/fuzz_targets/h3",
+    "existing_oss_fuzz_project_path": "${HOST_HOME}/Project/oss-fuzz/oss-fuzz/projects/h3",
+    "existing_project_yaml_path": "${HOST_HOME}/Project/oss-fuzz/oss-fuzz/projects/h3/project.yaml"
+  },
+  "strict_live_expectations": {
+    "selected_harness": "fuzzerCellArea",
+    "crash_source": "live_raw",
+    "trace_mode": "live_asan",
+    "closure_mode": "strict_live"
+  }
+}

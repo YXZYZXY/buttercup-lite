@@ -1,0 +1,59 @@
+{
+  "name": "expat_source",
+  "priority": "P0",
+  "mode": "hybrid",
+  "adapter_type": "ossfuzz",
+  "project": "expat",
+  "source": {
+    "adapter_type": "ossfuzz",
+    "uri": "https://github.com/libexpat/libexpat.git",
+    "ref": "master"
+  },
+  "challenge_repo": {
+    "remote_url": "https://github.com/libexpat/libexpat.git",
+    "branch": "master"
+  },
+  "fuzz_tooling": {
+    "remote_url": "https://github.com/google/oss-fuzz.git",
+    "branch": "master",
+    "project_name": "expat",
+    "local_project_path": "${HOST_HOME}/Project/oss-fuzz/oss-fuzz/projects/expat",
+    "local_project_yaml_path": "${HOST_HOME}/Project/oss-fuzz/oss-fuzz/projects/expat/project.yaml"
+  },
+  "expected_harness": "xml_parse_fuzzer_ISO-8859-1",
+  "needs_import_assisted": false,
+  "profile": {
+    "FUZZ_MAX_TOTAL_TIME_SECONDS": 180,
+    "FUZZ_TIMEOUT_SECONDS": 10,
+    "FUZZ_MAX_LEN": 131072,
+    "SEED_MAX_BYTES": 131072,
+    "SEED_GENERATION_ATTEMPTS": 2,
+    "SEED_FUNCTION_TIMEOUT_SECONDS": 24,
+    "LLM_TEMPERATURE": 0.2
+  },
+  "metadata_template": {
+    "project": "expat",
+    "repo_first": true,
+    "repo_url": "https://github.com/libexpat/libexpat.git",
+    "git_ref": "master",
+    "source_type": "git_repo",
+    "selected_oss_fuzz_project": "expat",
+    "existing_oss_fuzz_project_path": "${HOST_HOME}/Project/oss-fuzz/oss-fuzz/projects/expat",
+    "existing_project_yaml_path": "${HOST_HOME}/Project/oss-fuzz/oss-fuzz/projects/expat/project.yaml",
+    "source_resolution_class": "direct_oss_fuzz_project_reuse",
+    "selected_build_strategy": "oss_fuzz_build_assets",
+    "selected_harness_strategy": "oss_fuzz_harness_scan",
+    "FUZZ_LAUNCHER_PATH": "${PROJECT_ROOT}/scripts/glibc239_binary_launcher.sh",
+    "existing_launcher_path": "${PROJECT_ROOT}/scripts/glibc239_binary_launcher.sh"
+  },
+  "reused_assets": {
+    "existing_oss_fuzz_project_path": "${HOST_HOME}/Project/oss-fuzz/oss-fuzz/projects/expat",
+    "existing_project_yaml_path": "${HOST_HOME}/Project/oss-fuzz/oss-fuzz/projects/expat/project.yaml"
+  },
+  "strict_live_expectations": {
+    "selected_harness": "xml_parse_fuzzer_ISO-8859-1",
+    "crash_source": "live_raw",
+    "trace_mode": "live_asan",
+    "closure_mode": "strict_live"
+  }
+}

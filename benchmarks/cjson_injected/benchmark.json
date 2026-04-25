@@ -1,0 +1,44 @@
+{
+  "name": "cjson_injected",
+  "priority": "P0",
+  "mode": "hybrid",
+  "adapter_type": "ossfuzz",
+  "project": "cjson",
+  "challenge_repo": {
+    "remote_url": "https://github.com/baiyujun/cjson.git",
+    "branch": "fix/buttercup-build",
+    "local_path": "${HOST_HOME}/Project/benchmarks/cjson-injected"
+  },
+  "fuzz_tooling": {
+    "remote_url": "https://github.com/mid-fall/oss-fuzz.git",
+    "branch": "main",
+    "project_name": "cjson",
+    "local_project_path": "${HOST_HOME}/Project/oss-fuzz/oss-fuzz/projects/cjson",
+    "local_project_yaml_path": "${HOST_HOME}/Project/oss-fuzz/oss-fuzz/projects/cjson/project.yaml"
+  },
+  "expected_harness": "cjson_read_fuzzer",
+  "needs_import_assisted": false,
+  "profile": {
+    "FUZZ_MAX_TOTAL_TIME_SECONDS": 180,
+    "FUZZ_TIMEOUT_SECONDS": 10,
+    "FUZZ_RSS_LIMIT_MB": 8192,
+    "FUZZ_MAX_LEN": 262144,
+    "SEED_MAX_BYTES": 262144,
+    "SEED_GENERATION_ATTEMPTS": 6,
+    "SEED_FUNCTION_TIMEOUT_SECONDS": 20,
+    "LLM_TEMPERATURE": 0.35,
+    "LLM_MAX_TOKENS": 0
+  },
+  "reused_assets": {
+    "existing_src_path": "${HOST_HOME}/Project/benchmarks/cjson-injected",
+    "existing_oss_fuzz_project_path": "${HOST_HOME}/Project/oss-fuzz/oss-fuzz/projects/cjson",
+    "existing_project_yaml_path": "${HOST_HOME}/Project/oss-fuzz/oss-fuzz/projects/cjson/project.yaml"
+  },
+  "ground_truth_path": "${PROJECT_ROOT}/benchmarks/cjson_injected/ground_truth.json",
+  "strict_live_expectations": {
+    "selected_harness": "cjson_read_fuzzer",
+    "crash_source": "live_raw",
+    "trace_mode": "live_asan",
+    "closure_mode": "strict_live"
+  }
+}

@@ -1,0 +1,77 @@
+{
+  "benchmark": "cjson_injected",
+  "challenge_repo_url": "https://github.com/baiyujun/cjson.git",
+  "branch": "fix/buttercup-build",
+  "vulnerabilities": [
+    {
+      "vuln_id": "CJSON_VULN_001_PRINTBUFFER_REALLOC",
+      "type": "heap-buffer-overflow",
+      "file": "cJSON.c",
+      "function": "ensure",
+      "line_range": [497, 509],
+      "introducing_commit": null,
+      "branch": "fix/buttercup-build",
+      "description": "The NULL handling after printbuffer reallocate was removed, so ensure() can leave an invalid buffer state that later manifests as heap-buffer-overflow during print_value/cJSON_PrintBuffered.",
+      "expected_harness": "cjson_read_fuzzer",
+      "expected_trigger_pattern": ["print_value", "cJSON_PrintBuffered", "realloc"],
+      "expected_functions": ["ensure", "print_value", "cJSON_PrintBuffered"],
+      "target_mode": "both"
+    },
+    {
+      "vuln_id": "CJSON_VULN_002_DELETE_DOUBLE_FREE",
+      "type": "double-free",
+      "file": "cJSON.c",
+      "function": "cJSON_Delete",
+      "line_range": [260, 279],
+      "introducing_commit": null,
+      "branch": "fix/buttercup-build",
+      "description": "cJSON_Delete frees item->valuestring twice when the string is owned, creating an explicit CWE-415 double free.",
+      "expected_harness": "cjson_read_fuzzer",
+      "expected_trigger_pattern": ["cJSON_Delete", "double-free", "valuestring"],
+      "expected_functions": ["cJSON_Delete"],
+      "target_mode": "both"
+    },
+    {
+      "vuln_id": "CJSON_VULN_003_SETVALUESTRING_STRCPY",
+      "type": "heap-buffer-overflow",
+      "file": "cJSON.c",
+      "function": "cJSON_SetValuestring",
+      "line_range": [410, 419],
+      "introducing_commit": null,
+      "branch": "fix/buttercup-build",
+      "description": "cJSON_SetValuestring performs an unchecked strcpy into the existing valuestring buffer and can overflow it.",
+      "expected_harness": "cjson_read_fuzzer",
+      "expected_trigger_pattern": ["cJSON_SetValuestring", "strcpy"],
+      "expected_functions": ["cJSON_SetValuestring"],
+      "target_mode": "both"
+    },
+    {
+      "vuln_id": "CJSON_VULN_004_PARSE_STRING_BACKSLASH",
+      "type": "heap-buffer-overflow",
+      "file": "cJSON.c",
+      "function": "parse_string",
+      "line_range": [796, 805],
+      "introducing_commit": null,
+      "branch": "fix/buttercup-build",
+      "description": "parse_string mishandles a closing backslash edge case and can walk off the input buffer when parsing malformed JSON strings.",
+      "expected_harness": "cjson_read_fuzzer",
+      "expected_trigger_pattern": ["parse_string", "backslash", "invalid escape"],
+      "expected_functions": ["parse_string"],
+      "target_mode": "both"
+    },
+    {
+      "vuln_id": "CJSON_VULN_005_OBJECT_STRING_ALIAS_UAF",
+      "type": "use-after-free",
+      "file": "cJSON.c",
+      "function": "add_item_to_object",
+      "line_range": [2035, 2075],
+      "introducing_commit": null,
+      "branch": "fix/buttercup-build",
+      "description": "Aliasing object item strings through cJSON_AddItemToObject can lead to use-after-free style lifetime misuse, as captured by the dedicated misc_tests coverage.",
+      "expected_harness": "cjson_read_fuzzer",
+      "expected_trigger_pattern": ["add_item_to_object", "cJSON_AddItemToObject", "use-after-free"],
+      "expected_functions": ["add_item_to_object", "cJSON_AddItemToObject"],
+      "target_mode": "both"
+    }
+  ]
+}

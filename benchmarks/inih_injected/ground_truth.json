@@ -1,0 +1,29 @@
+{
+  "benchmark": "inih_injected",
+  "challenge_repo_url": "https://github.com/Misat0N/inih.git",
+  "branch": "main",
+  "vulnerabilities": [
+    {
+      "vuln_id": "INIH_VULN_001_SECTION_STACK_OVERFLOW",
+      "type": "stack-buffer-overflow",
+      "file": "ini.c",
+      "function": "ini_parse_stream",
+      "line_range": [197, 200],
+      "introducing_commit": null,
+      "branch": "main",
+      "description": "The section parsing path overwrites the fixed-size section stack buffer by copying the full raw line with strcpy() after an off-by-one bounded copy attempt, leading to stack-buffer-overflow on malformed or oversized section names.",
+      "expected_harness": "inihfuzz",
+      "expected_trigger_pattern": [
+        "ini_parse_stream",
+        "section",
+        "stack-buffer-overflow",
+        "strcpy"
+      ],
+      "expected_functions": [
+        "ini_parse_stream",
+        "strncpy0"
+      ],
+      "target_mode": "source"
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+name: buttercup-build-toolchain
+channels:
+  - conda-forge
+dependencies:
+  - clang
+  - llvmdev
+  - cmake
+  - ninja
+  - autoconf
+  - automake
+  - libtool
+  - pkg-config
+  - patchelf
+  - rsync
+  - zip
+  - unzip
+  - make

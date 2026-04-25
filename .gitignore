@@ -1,0 +1,32 @@
+# 运行时产物（体积极大，纯产出物）
+data/*
+!data/.gitkeep
+runtime/*
+!runtime/.gitkeep
+reports/*
+!reports/.gitkeep
+
+# 本地环境密钥（仅保留模板）
+.env
+.env.*
+!.env.example
+
+# 本地工具链（二进制过大，GitHub 拒收）
+.toolchains/*
+!.toolchains/.gitkeep
+
+# IDA Pro 本地安装目录（仓库中仅保留空目录占位）
+ida_pro/*
+!ida_pro/.gitkeep
+
+# Python 缓存
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+**/.pytest_cache/
+
+# 压缩包
+*.tar.gz
+*.zip
