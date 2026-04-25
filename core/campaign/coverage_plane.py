@@ -121,7 +121,10 @@ def _coverage_failure_detail(
             any(_clean_name(item.get("stderr_excerpt")) for item in replay_results if isinstance(item, dict)),
         )
     if degraded_reason:
-        detail.setdefault("retryable", degraded_reason in {"no_corpus_samples_available", "no_profraw_emitted"})
+        detail.setdefault(
+            "retryable",
+            degraded_reason in {"UNKNOWN", "PROFRAW_NOT_EMITTED", "no_corpus_samples_available", "no_profraw_emitted"},
+        )
     return detail or None
 
 
@@ -449,7 +452,9 @@ def build_round_coverage_snapshot(task_id: str) -> dict[str, Any]:
         "exact_available": level == "exact",
         "partial_degraded": level != "exact",
         "degraded_reason": _clean_name(degraded_reason) or None,
+        "exact_coverage_failure_reason": _clean_name(degraded_reason) or None,
         "degraded_detail": degraded_detail,
+        "coverage_step": artifact.get("coverage_step") or current.get("coverage_step"),
         "line_coverage_fraction": summary.get("line_coverage_fraction"),
         "function_coverage_fraction": summary.get("function_coverage_fraction"),
         "covered_function_count": len(

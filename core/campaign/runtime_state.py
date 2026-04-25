@@ -52,6 +52,7 @@ if TYPE_CHECKING:
 
 STACK_OFFSET_PATTERN = re.compile(r"\+0x([0-9a-fA-F]+)")
 ACCESS_KIND_PATTERN = re.compile(r"\b(READ|WRITE)\s+of\s+size\b", re.IGNORECASE)
+COVERAGE_TARGET_STALL_THRESHOLD = 3
 
 
 def _read_json(path: Path, default: Any) -> Any:
@@ -285,6 +286,32 @@ def _coverage_queue_driven_reseed(coverage_claim: dict[str, Any], *, coverage_st
     if coverage_claim.get("selected_target_function"):
         return True, "coverage_queue::selected_target"
     return False, None
+
+
+def _coverage_exact_priority_targets(coverage_claim: dict[str, Any]) -> list[dict[str, Any]]:
+    selected_targets = list(coverage_claim.get("selected_target_functions") or [])
+    exact_priority: list[dict[str, Any]] = []
+    for item in selected_targets:
+        if not isinstance(item, dict):
+            continue
+        source_level = str(item.get("source_level") or "").strip().lower()
+        queue_kind = str(item.get("queue_kind") or "").strip().lower()
+        if source_level != "exact":
+            continue
+        if queue_kind not in {"uncovered", "low_growth"}:
+            continue
+        exact_priority.append(dict(item))
+    return _dedupe_names(exact_priority, limit=8)
+
+
+def _coverage_target_stall_rounds(state: dict[str, Any], selected_target_function: str | None) -> int:
+    target_name = str(selected_target_function or "").strip()
+    if not target_name:
+        return 0
+    coverage_state = dict(state.get("coverage_state") or {})
+    per_target_stall_counts = dict(coverage_state.get("per_target_stall_counts") or {})
+    target_state = dict(per_target_stall_counts.get(target_name) or {})
+    return int(target_state.get("stall_rounds") or 0)
 
 
 def _resolve_current_harness_binding(
@@ -712,6 +739,9 @@ def initialize_campaign_runtime_state(
             "partial_degraded_target_queue": [],
             "stalled_target_queue": [],
             "per_harness_recent_growth": {},
+            "per_target_stall_counts": {},
+            "recent_coverage_growth": 0.0,
+            "last_target_stall_count": 0,
             "last_exact_coverage_time": None,
             "last_line_coverage_fraction": None,
             "coverage_stalled": False,
@@ -1169,6 +1199,7 @@ def choose_next_session_plan(
     )
     coverage_queue_primary_entry = _coverage_claim_primary_entry(coverage_claim)
     coverage_queue_harness_override = _coverage_harness_override_name(coverage_claim)
+    coverage_exact_priority_targets = _coverage_exact_priority_targets(coverage_claim)
     harness_switch_stagnation_threshold = 15
     override_attempted = bool(
         coverage_queue_harness_override
@@ -1274,7 +1305,8 @@ def choose_next_session_plan(
         )
     else:
         preferred_targets = (
-            family_focus_targets
+            coverage_exact_priority_targets
+            or family_focus_targets
             or coverage_plane_targets
             or coverage_stalled_queue
             or coverage_partial_queue
@@ -1285,6 +1317,9 @@ def choose_next_session_plan(
     coverage_request_plan = _build_coverage_request_plan(preferred_targets)
     selected_target_function = preferred_targets[0]["name"] if preferred_targets else (binary_selected_focus if target_mode == "binary" else None)
     selected_target_functions = preferred_targets[:5]
+    selected_target_stall_rounds = _coverage_target_stall_rounds(state, selected_target_function)
+    recent_coverage_growth = float((state.get("coverage_state") or {}).get("recent_coverage_growth") or 0.0)
+    coverage_target_stalled = selected_target_stall_rounds >= COVERAGE_TARGET_STALL_THRESHOLD
     selected_binary_slice_focus = (
         binary_selected_focus
         or selected_target_function
@@ -1319,6 +1354,12 @@ def choose_next_session_plan(
     elif family_stalled:
         triggered_action_type = "family_diversification"
         seed_mode_override = "SEED_EXPLORE"
+    elif coverage_target_stalled:
+        triggered_action_type = "coverage_target_stall_followup"
+        seed_mode_override = "SEED_EXPLORE"
+    elif target_mode != "binary" and recent_coverage_growth > 0.0:
+        triggered_action_type = "coverage_growth_followup"
+        seed_mode_override = "VULN_DISCOVERY"
     elif coverage_plane_engaged or selected_target_function:
         if coverage_queue_kind == "stalled":
             triggered_action_type = "coverage_plane_stalled_queue"
@@ -1362,6 +1403,7 @@ def choose_next_session_plan(
         "coverage_plane_selected_entries": coverage_claim.get("selected_entries") or [],
         "coverage_plane_selected_target_functions": coverage_claim.get("selected_target_functions") or [],
         "coverage_plane_selected_harness_targets": coverage_claim.get("selected_harness_targets") or [],
+        "coverage_exact_priority_targets": coverage_exact_priority_targets,
         "campaign_coverage_queue_consumption_path": coverage_claim.get("campaign_coverage_queue_consumption_path"),
         "campaign_coverage_plane_state_path": coverage_claim.get("campaign_coverage_plane_state_path"),
         "campaign_coverage_queue_path": coverage_claim.get("campaign_coverage_queue_path"),
@@ -1377,6 +1419,9 @@ def choose_next_session_plan(
         "coverage_queue_budget_multiplier": coverage_budget_multiplier,
         "coverage_queue_reseed_reason": coverage_reseed_reason,
         "coverage_plane_harness_queue_pressure": harness_queue_pressure,
+        "coverage_recent_growth": recent_coverage_growth,
+        "coverage_target_stall_rounds": selected_target_stall_rounds,
+        "coverage_target_stall_threshold": COVERAGE_TARGET_STALL_THRESHOLD,
         "harness_decision_trace": harness_decision_trace,
         "seed_mode_override": seed_mode_override,
         "reseed_triggered": bool(
@@ -2047,6 +2092,7 @@ def apply_round_results_to_campaign(
             "partial_degraded_target_queue": coverage_state.get("partial_degraded_target_queue") or [],
             "stalled_target_queue": coverage_state.get("stalled_target_queue") or [],
             "last_line_coverage_fraction": current_fraction,
+            "recent_coverage_growth": coverage_growth,
             "coverage_stalled": coverage_state.get("coverage_stalled"),
             "degraded_reason": coverage_state.get("degraded_reason"),
             "degraded_detail": coverage_state.get("degraded_detail"),
@@ -2060,6 +2106,29 @@ def apply_round_results_to_campaign(
     per_harness_growth = dict(updated_coverage_state.get("per_harness_recent_growth") or {})
     per_harness_growth[selected_harness] = coverage_growth
     updated_coverage_state["per_harness_recent_growth"] = per_harness_growth
+    per_target_stall_counts = dict(updated_coverage_state.get("per_target_stall_counts") or {})
+    selected_target_name = str(round_record.get("selected_target_function") or state.get("last_selected_target_function") or "").strip()
+    current_target_stall_count = 0
+    if selected_target_name:
+        previous_target_state = dict(per_target_stall_counts.get(selected_target_name) or {})
+        current_target_stall_count = 0 if coverage_growth > 0.0 else int(previous_target_state.get("stall_rounds") or 0) + 1
+        per_target_stall_counts[selected_target_name] = {
+            "stall_rounds": current_target_stall_count,
+            "last_coverage_growth": coverage_growth,
+            "last_updated_at": now_iso,
+        }
+    if len(per_target_stall_counts) > 64:
+        ordered_targets = sorted(
+            per_target_stall_counts.items(),
+            key=lambda item: (
+                str((item[1] or {}).get("last_updated_at") or ""),
+                item[0],
+            ),
+            reverse=True,
+        )
+        per_target_stall_counts = {name: value for name, value in ordered_targets[:64]}
+    updated_coverage_state["per_target_stall_counts"] = per_target_stall_counts
+    updated_coverage_state["last_target_stall_count"] = current_target_stall_count
     state["coverage_state"] = updated_coverage_state
 
     plane_update = update_coverage_plane_after_round(
@@ -2356,6 +2425,8 @@ def apply_round_results_to_campaign(
         )
         state["last_stagnation_state"] = {
             "coverage_stalled": bool(updated_coverage_state.get("coverage_stalled")),
+            "coverage_growth": coverage_growth,
+            "coverage_target_stall_count": current_target_stall_count,
             "family_stagnation_count": family_stagnation_count,
             "triggered_action_type": round_record.get("triggered_action_type"),
             "selected_harness": selected_harness,

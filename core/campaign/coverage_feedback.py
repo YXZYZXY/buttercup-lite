@@ -432,7 +432,11 @@ def collect_coverage_snapshot(task_id: str, task_store: TaskStateStore) -> tuple
     stderr_path = logs_dir / "fuzzer.stderr.log"
     stderr_text = stderr_path.read_text(encoding="utf-8", errors="ignore") if stderr_path.exists() else ""
     fuzz_manifest = _load_json(Path(task.runtime.get("fuzz_manifest_path", "")))
-    coverage_artifacts = collect_source_coverage_artifacts(task)
+    coverage_artifacts = collect_source_coverage_artifacts(
+        task,
+        requested_by="coverage_feedback_retry",
+        retry_if_existing=True,
+    )
     snapshot = {
         "task_id": task_id,
         "captured_at": task_store.now(),
@@ -460,6 +464,11 @@ def collect_coverage_snapshot(task_id: str, task_store: TaskStateStore) -> tuple
         "per_target_function_contribution": fuzz_manifest.get("per_target_function_contribution", []),
         "coverage_artifacts_level": coverage_artifacts.get("coverage_artifacts_level"),
         "coverage_artifact_manifest_path": coverage_artifacts.get("coverage_artifact_manifest_path"),
+        "exact_coverage_failure_reason": coverage_artifacts.get("exact_coverage_failure_reason"),
+        "exact_coverage_failure_reason_legacy": coverage_artifacts.get("exact_coverage_failure_reason_legacy"),
+        "coverage_failure_detail": coverage_artifacts.get("coverage_failure_detail"),
+        "coverage_step": coverage_artifacts.get("coverage_step"),
+        "coverage_collection_strategy": coverage_artifacts.get("coverage_collection_strategy"),
         "per_function_summary": coverage_artifacts.get("per_function_summary", []),
         "per_file_summary": coverage_artifacts.get("per_file_summary", []),
         "covered_function_count": coverage_artifacts.get("covered_function_count", 0),

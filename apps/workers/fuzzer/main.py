@@ -225,7 +225,11 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
         )
 
     result = run_libfuzzer(task_dir, task.metadata)
-    coverage_artifacts = collect_source_coverage_artifacts(task)
+    coverage_artifacts = collect_source_coverage_artifacts(
+        task,
+        requested_by="fuzz_worker_post_run",
+        force_retry=True,
+    )
     coverage_summary_path = _write_coverage_summary(task, coverage_artifacts, generated_at=task_store.now())
     progress_metrics = _parse_progress_metrics(result.stderr)
     signal_summary = _stderr_signal_summary(result.stderr)
