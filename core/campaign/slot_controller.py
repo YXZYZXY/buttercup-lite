@@ -1356,6 +1356,7 @@ class SlotController:
             "completed_count": len((state.get("queues") or {}).get("completed") or []),
             "failed_count": len((state.get("queues") or {}).get("failed") or []),
             "requeue_count": len((state.get("queues") or {}).get("requeue") or []),
+            "dead_count": len((state.get("queues") or {}).get("dead") or []),
             "slot_count": len(state.get("slots") or {}),
             "metrics": state.get("metrics") or {},
         }

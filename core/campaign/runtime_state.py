@@ -17,6 +17,7 @@ from core.campaign.corpus_merger import corpus_policy, merge_corpus_layers
 from core.campaign.corpus_quality import safe_corpus_component
 from core.seed.harness_selector import load_harness_candidates
 from core.campaign.system_fabric import (
+    claim_planning_feedback,
     register_campaign,
     stage_system_corpus,
     system_candidate_queue_path,
@@ -1200,6 +1201,12 @@ def choose_next_session_plan(
     coverage_queue_primary_entry = _coverage_claim_primary_entry(coverage_claim)
     coverage_queue_harness_override = _coverage_harness_override_name(coverage_claim)
     coverage_exact_priority_targets = _coverage_exact_priority_targets(coverage_claim)
+    system_feedback = claim_planning_feedback(
+        campaign_task_id=str(state.get("task_id") or ""),
+        target_mode=target_mode,
+        selected_harness=selected_harness_name,
+        limit=8,
+    )
     harness_switch_stagnation_threshold = 15
     override_attempted = bool(
         coverage_queue_harness_override
@@ -1260,10 +1267,23 @@ def choose_next_session_plan(
     coverage_plane_targets = _dedupe_names(coverage_claim.get("selected_target_functions") or [])
     coverage_plane_harness_targets = _dedupe_names(coverage_claim.get("selected_harness_targets") or [])
     coverage_partial_queue = _dedupe_names(coverage_state.get("partial_degraded_target_queue") or [])
-    coverage_stalled_queue = _dedupe_names(coverage_state.get("stalled_target_queue") or [])
-    low_growth_queue = _dedupe_names(coverage_state.get("low_growth_function_queue") or [])
-    uncovered_queue = _dedupe_names(coverage_state.get("uncovered_function_queue") or [])
-    candidate_bridge_queue = _dedupe_names(state.get("candidate_bridge_queue") or [])
+    coverage_stalled_queue = _dedupe_names(
+        list(coverage_state.get("stalled_target_queue") or [])
+        + list(system_feedback.get("system_stalled_targets") or [])
+    )
+    low_growth_queue = _dedupe_names(
+        list(coverage_state.get("low_growth_function_queue") or [])
+        + list(system_feedback.get("system_low_growth_functions") or [])
+    )
+    uncovered_queue = _dedupe_names(
+        list(coverage_state.get("uncovered_function_queue") or [])
+        + list(system_feedback.get("system_uncovered_functions") or [])
+    )
+    candidate_bridge_queue = _dedupe_names(
+        list(state.get("candidate_bridge_queue") or [])
+        + list(system_feedback.get("system_candidate_bridge") or [])
+    )
+    system_family_feedback_targets = _dedupe_names(system_feedback.get("system_family_feedback_queue") or [])
     family_focus_targets = _dedupe_names(
         [
             {
@@ -1280,7 +1300,6 @@ def choose_next_session_plan(
             if _family_focus_target_name(item)
         ]
     )
-    system_feedback: dict[str, Any] = {}
     coverage_queue_kind = str(coverage_claim.get("coverage_queue_kind") or "").strip() or None
     coverage_plane_engaged = bool(
         coverage_plane_targets
@@ -1296,6 +1315,7 @@ def choose_next_session_plan(
             or binary_trace_targets
             or binary_focus_targets
             or family_focus_targets
+            or system_family_feedback_targets
             or coverage_plane_targets
             or coverage_stalled_queue
             or coverage_partial_queue
@@ -1307,6 +1327,7 @@ def choose_next_session_plan(
         preferred_targets = (
             coverage_exact_priority_targets
             or family_focus_targets
+            or system_family_feedback_targets
             or coverage_plane_targets
             or coverage_stalled_queue
             or coverage_partial_queue

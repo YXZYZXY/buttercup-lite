@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import fcntl
 import json
+import re
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -14,7 +15,9 @@ from core.campaign.fabric_models import (
     FabricSlotState,
     FabricWorkItem,
 )
+from core.queues.redis_queue import RedisQueue
 from core.storage.layout import tasks_root
+from core.utils.settings import settings
 
 
 def _now() -> str:
@@ -29,6 +32,12 @@ def _parse_iso(value: str | None) -> datetime | None:
         return datetime.fromisoformat(raw)
     except ValueError:
         return None
+
+
+def _safe_queue_component(value: Any) -> str:
+    normalized = re.sub(r"[^a-zA-Z0-9_.-]+", "_", str(value or "").strip())
+    normalized = normalized.strip("._")
+    return normalized or "default"
 
 
 def fabric_root() -> Path:
@@ -84,7 +93,8 @@ def _initial_state() -> dict[str, Any]:
             "claimed": [],
             "completed": [],
             "failed": [],
-            "requeue": []
+            "requeue": [],
+            "dead": [],
         },
         "work_items": {},
         "claims": {},
@@ -95,7 +105,20 @@ def _initial_state() -> dict[str, Any]:
             "completed_total": 0,
             "failed_total": 0,
             "requeued_total": 0,
-            "continuations_total": 0
+            "continuations_total": 0,
+            "nacked_total": 0,
+            "dead_letter_total": 0,
+            "recovered_total": 0,
+            "campaign_claim_count": 0,
+            "campaign_ack_count": 0,
+            "continuation_claim_count": 0,
+            "continuation_ack_count": 0,
+            "coverage_claim_count": 0,
+            "coverage_ack_count": 0,
+            "candidate_bridge_claim_count": 0,
+            "candidate_bridge_ack_count": 0,
+            "family_promotion_claim_count": 0,
+            "family_promotion_ack_count": 0,
         }
     }
 
@@ -114,6 +137,61 @@ class FabricStore:
         self.root = fabric_root()
         self.state_path = fabric_state_path()
         self.events_path = fabric_events_path()
+        self.queue = RedisQueue(settings.redis_url, default_lease_ttl=300, max_retry=3)
+
+    def _continuation_queue_name(self, *, namespace: str | None, slot_label: str | None) -> str:
+        return ".".join(
+            [
+                "q",
+                "fabric",
+                _safe_queue_component(namespace),
+                "continuation",
+                _safe_queue_component(slot_label),
+            ]
+        )
+
+    def _feedback_queue_name(self, *, namespace: str | None, campaign_task_id: str | None) -> str:
+        return ".".join(
+            [
+                "q",
+                "fabric",
+                _safe_queue_component(namespace),
+                "feedback",
+                _safe_queue_component(campaign_task_id),
+            ]
+        )
+
+    def _queue_name_for_item(self, item: dict[str, Any]) -> str:
+        item_type = str(item.get("item_type") or item.get("kind") or "campaign").strip().lower()
+        if item_type in {"campaign", "continuation"}:
+            return self._continuation_queue_name(
+                namespace=str(item.get("namespace") or "") or None,
+                slot_label=str(item.get("slot_label") or item.get("benchmark") or item.get("project") or "") or None,
+            )
+        return self._feedback_queue_name(
+            namespace=str(item.get("namespace") or "") or None,
+            campaign_task_id=(
+                str(item.get("campaign_task_id") or "")
+                or str(item.get("source_campaign") or "")
+                or str(item.get("base_task_id") or "")
+                or None
+            ),
+        )
+
+    def _transport_payload_for_item(self, item: dict[str, Any]) -> str:
+        payload = {
+            "item_id": str(item.get("item_id") or item.get("work_item_id") or ""),
+            "payload": str(item.get("item_id") or item.get("work_item_id") or ""),
+            "queue_name": str(item.get("queue_name") or ""),
+            "created_at": str(item.get("created_at") or _now()),
+            "retry_count": int(item.get("retry_count") or 0),
+            "ack_state": str(item.get("ack_state") or "pending"),
+        }
+        return json.dumps(payload, ensure_ascii=False)
+
+    def _metric_field(self, item_type: str, *, suffix: str) -> str:
+        normalized = _safe_queue_component(item_type).lower()
+        return f"{normalized}_{suffix}"
 
     def _load_state(self) -> dict[str, Any]:
         return _read_json(self.state_path, _initial_state())
@@ -198,6 +276,147 @@ class FabricStore:
             updated_at=now,
         ).to_dict()
 
+    def _register_pending_transport_locked(self, state: dict[str, Any], item: dict[str, Any]) -> None:
+        queue_name = self._queue_name_for_item(item)
+        item["queue_name"] = queue_name
+        item["item_id"] = str(item.get("item_id") or item.get("work_item_id") or "")
+        item["item_type"] = str(item.get("item_type") or item.get("kind") or "campaign")
+        item["ack_state"] = "pending"
+        item["lease_owner"] = None
+        item["lease_until"] = None
+        item["retry_count"] = int(item.get("retry_count") or item.get("requeue_count") or 0)
+        self.queue.push(queue_name, self._transport_payload_for_item(item))
+        self._queue_append_unique(state.setdefault("queues", {}).setdefault("pending", []), item["work_item_id"])
+
+    def _mark_claimed_locked(
+        self,
+        state: dict[str, Any],
+        *,
+        item: dict[str, Any],
+        slot_id: str,
+        claim_token: str,
+        lease_expires_at: str,
+        retry_count: int,
+    ) -> dict[str, Any]:
+        now = _now()
+        work_item_id = str(item.get("work_item_id") or "")
+        item["status"] = "claimed"
+        item["claim_token"] = claim_token
+        item["claimed_by_slot"] = slot_id
+        item["claimed_at"] = now
+        item["last_heartbeat_at"] = now
+        item["lease_duration_seconds"] = max(60, int(item.get("lease_duration_seconds") or 0) or 300)
+        item["lease_expires_at"] = lease_expires_at
+        item["lease_owner"] = slot_id
+        item["lease_until"] = lease_expires_at
+        item["ack_state"] = "processing"
+        item["retry_count"] = max(int(item.get("retry_count") or 0), int(retry_count))
+        item["attempt_count"] = int(item.get("attempt_count") or 0) + 1
+        item["updated_at"] = now
+        self._queue_remove(state.setdefault("queues", {}).setdefault("pending", []), work_item_id)
+        self._queue_append_unique(state["queues"].setdefault("claimed", []), work_item_id)
+        state.setdefault("claims", {})[claim_token] = self._claim_record(
+            claim_token=claim_token,
+            work_item_id=work_item_id,
+            slot_id=slot_id,
+            lease_expires_at=lease_expires_at,
+        )
+        slot = state.setdefault("slots", {}).get(slot_id)
+        if slot:
+            slot["status"] = "claimed"
+            slot["current_work_item_id"] = work_item_id
+            slot["current_claim_token"] = claim_token
+            slot["last_claimed_at"] = now
+            slot["last_heartbeat_at"] = now
+            slot["claims_total"] = int(slot.get("claims_total") or 0) + 1
+            slot["updated_at"] = now
+        state.setdefault("metrics", {})["claims_total"] = int(state["metrics"].get("claims_total") or 0) + 1
+        metric_field = self._metric_field(str(item.get("item_type") or item.get("kind") or "campaign"), suffix="claim_count")
+        state["metrics"][metric_field] = int(state["metrics"].get(metric_field) or 0) + 1
+        return item
+
+    def _ack_item_locked(
+        self,
+        state: dict[str, Any],
+        *,
+        item: dict[str, Any],
+        claim: dict[str, Any] | None,
+        slot_id: str | None,
+        final_status: str,
+    ) -> None:
+        now = _now()
+        work_item_id = str(item.get("work_item_id") or "")
+        queue_name = str(item.get("queue_name") or self._queue_name_for_item(item))
+        self.queue.ack(queue_name, str(item.get("item_id") or work_item_id))
+        item["ack_state"] = "acked"
+        item["acked_at"] = now
+        item["lease_owner"] = None
+        item["lease_until"] = None
+        item["lease_expires_at"] = None
+        item["claim_token"] = None
+        item["claimed_by_slot"] = None
+        item["updated_at"] = now
+        self._queue_remove(state.setdefault("queues", {}).setdefault("claimed", []), work_item_id)
+        self._queue_remove(state["queues"].setdefault("pending", []), work_item_id)
+        target_queue = "completed" if final_status == "completed" else "failed"
+        self._queue_append_unique(state["queues"].setdefault(target_queue, []), work_item_id)
+        if claim:
+            claim["status"] = final_status
+            claim["updated_at"] = now
+        metric_field = self._metric_field(str(item.get("item_type") or item.get("kind") or "campaign"), suffix="ack_count")
+        state.setdefault("metrics", {})[metric_field] = int(state["metrics"].get(metric_field) or 0) + 1
+
+    def _apply_transport_recovery_locked(
+        self,
+        state: dict[str, Any],
+        *,
+        item_id: str,
+        recovered_record: dict[str, Any],
+    ) -> None:
+        item = state.setdefault("work_items", {}).get(item_id)
+        if not item:
+            return
+        now = _now()
+        ack_state = str(recovered_record.get("ack_state") or "pending")
+        item["ack_state"] = ack_state
+        item["retry_count"] = int(recovered_record.get("retry_count") or item.get("retry_count") or 0)
+        item["lease_owner"] = None
+        item["lease_until"] = None
+        item["lease_expires_at"] = None
+        item["claim_token"] = None
+        slot_id = str(item.get("claimed_by_slot") or "")
+        item["claimed_by_slot"] = None
+        item["claimed_at"] = None
+        item["updated_at"] = now
+        self._queue_remove(state.setdefault("queues", {}).setdefault("claimed", []), item_id)
+        state.setdefault("metrics", {})["recovered_total"] = int(state["metrics"].get("recovered_total") or 0) + 1
+        if ack_state == "dead":
+            item["status"] = "dead"
+            item["dead_lettered_at"] = now
+            self._queue_append_unique(state["queues"].setdefault("dead", []), item_id)
+            state["metrics"]["dead_letter_total"] = int(state["metrics"].get("dead_letter_total") or 0) + 1
+        else:
+            item["status"] = "pending"
+            self._queue_append_unique(state["queues"].setdefault("pending", []), item_id)
+            self._queue_append_unique(state["queues"].setdefault("requeue", []), item_id)
+            state["metrics"]["requeued_total"] = int(state["metrics"].get("requeued_total") or 0) + 1
+        if slot_id:
+            slot = state.setdefault("slots", {}).get(slot_id)
+            if slot:
+                slot["status"] = "idle"
+                slot["current_work_item_id"] = None
+                slot["current_claim_token"] = None
+                slot["current_campaign_task_id"] = None
+                slot["requeues_total"] = int(slot.get("requeues_total") or 0) + 1
+                slot["updated_at"] = now
+        for claim_token, claim in list(state.setdefault("claims", {}).items()):
+            if str(claim.get("work_item_id") or "") != item_id:
+                continue
+            if str(claim.get("status") or "") in {"completed", "failed"}:
+                continue
+            claim["status"] = "expired"
+            claim["updated_at"] = now
+
     def _spawn_continuation_locked(
         self,
         state: dict[str, Any],
@@ -218,13 +437,22 @@ class FabricStore:
             lane=str(source_item.get("lane") or "source"),
             target_mode=str(source_item.get("target_mode") or "source"),
             project=str(source_item.get("project") or ""),
+            item_type="continuation",
             benchmark=source_item.get("benchmark"),
             namespace=source_item.get("namespace"),
             slot_label=source_item.get("slot_label"),
             base_task_id=next_base_task_id,
             donor_task_id=next_base_task_id,
             priority=int(source_item.get("priority") or 100),
+            source_campaign=str(source_item.get("campaign_task_id") or "") or None,
+            source_slot=str(source_item.get("slot_label") or "") or None,
             metadata=dict(source_item.get("metadata") or {}),
+            payload={
+                "next_base_task_id": next_base_task_id,
+                "remaining_seconds": int(remaining_seconds),
+                "requested_reason": requested_reason,
+                "completion_source": completion_source,
+            },
             continuation=FabricContinuation(
                 continuation_of_work_item_id=str(source_item.get("work_item_id") or ""),
                 continuation_index=continuation_index,
@@ -240,7 +468,7 @@ class FabricStore:
             updated_at=_now(),
         ).to_dict()
         state.setdefault("work_items", {})[item["work_item_id"]] = item
-        self._queue_append_unique(state.setdefault("queues", {}).setdefault("pending", []), item["work_item_id"])
+        self._register_pending_transport_locked(state, item)
         state.setdefault("metrics", {})["continuations_total"] = int(state["metrics"].get("continuations_total") or 0) + 1
         self._queue_sort_pending(state)
         self._append_event(
@@ -268,61 +496,65 @@ class FabricStore:
         with _fabric_lock():
             state = self._load_state()
             changed = False
-            now = _now()
-            now_dt = _parse_iso(now)
-            expired: list[dict[str, Any]] = []
-            for claim_token, claim in list(state.setdefault("claims", {}).items()):
-                if str(claim.get("status") or "") != "claimed":
-                    continue
-                lease_dt = _parse_iso(claim.get("lease_expires_at"))
-                if lease_dt is None or now_dt is None or lease_dt >= now_dt:
-                    continue
-                work_item_id = str(claim.get("work_item_id") or "")
-                slot_id = str(claim.get("slot_id") or "")
-                item = state.setdefault("work_items", {}).get(work_item_id)
-                if not item:
-                    continue
-                item["status"] = "pending"
-                item["claim_token"] = None
-                item["claimed_by_slot"] = None
-                item["claimed_at"] = None
-                item["lease_expires_at"] = None
-                item["last_status"] = "claim_expired_requeued"
-                item["requeue_count"] = int(item.get("requeue_count") or 0) + 1
-                item["updated_at"] = now
-                self._queue_remove(state.setdefault("queues", {}).setdefault("claimed", []), work_item_id)
-                self._queue_append_unique(state["queues"].setdefault("pending", []), work_item_id)
-                self._queue_append_unique(state["queues"].setdefault("requeue", []), work_item_id)
-                slot = state.setdefault("slots", {}).get(slot_id)
-                if slot:
-                    slot["status"] = "idle"
-                    slot["current_work_item_id"] = None
-                    slot["current_claim_token"] = None
-                    slot["current_campaign_task_id"] = None
-                    slot["requeues_total"] = int(slot.get("requeues_total") or 0) + 1
-                    slot["updated_at"] = now
-                claim["status"] = "expired"
-                claim["updated_at"] = now
-                changed = True
-                expired.append(
-                    {
-                        "work_item_id": work_item_id,
-                        "slot_id": slot_id,
-                        "claim_token": claim_token,
-                    }
-                )
-                self._append_event(
-                    event_type="claim_expired_requeued",
-                    work_item_id=work_item_id,
-                    slot_id=slot_id,
-                    claim_token=claim_token,
-                    details={"lease_expires_at": claim.get("lease_expires_at")},
-                )
+            recovered: list[dict[str, Any]] = []
+            dead_lettered: list[dict[str, Any]] = []
+            queue_names = {
+                str(item.get("queue_name") or "")
+                for item in (state.setdefault("work_items", {}) or {}).values()
+                if str(item.get("queue_name") or "").strip()
+            }
+            for queue_name in sorted(queue_names):
+                outcome = self.queue.recover_stale_leases(queue_name)
+                for record in outcome.get("recovered") or []:
+                    changed = True
+                    item_id = str(record.get("item_id") or "")
+                    self._apply_transport_recovery_locked(state, item_id=item_id, recovered_record=record)
+                    recovered.append(
+                        {
+                            "work_item_id": item_id,
+                            "queue_name": queue_name,
+                            "retry_count": int(record.get("retry_count") or 0),
+                        }
+                    )
+                    self._append_event(
+                        event_type="claim_expired_requeued",
+                        work_item_id=item_id,
+                        details={
+                            "queue_name": queue_name,
+                            "retry_count": int(record.get("retry_count") or 0),
+                            "lease_until": record.get("lease_until"),
+                        },
+                    )
+                for record in outcome.get("dead_lettered") or []:
+                    changed = True
+                    item_id = str(record.get("item_id") or "")
+                    self._apply_transport_recovery_locked(state, item_id=item_id, recovered_record=record)
+                    dead_lettered.append(
+                        {
+                            "work_item_id": item_id,
+                            "queue_name": queue_name,
+                            "retry_count": int(record.get("retry_count") or 0),
+                            "dead_letter_queue": record.get("dead_letter_queue"),
+                        }
+                    )
+                    self._append_event(
+                        event_type="work_item_dead_lettered",
+                        work_item_id=item_id,
+                        details={
+                            "queue_name": queue_name,
+                            "retry_count": int(record.get("retry_count") or 0),
+                            "dead_letter_queue": record.get("dead_letter_queue"),
+                        },
+                    )
             if changed:
-                state.setdefault("metrics", {})["requeued_total"] = int(state["metrics"].get("requeued_total") or 0) + len(expired)
                 self._queue_sort_pending(state)
                 self._save_state(state)
-            return {"requeued": expired, "state_path": str(self.state_path), "events_path": str(self.events_path)}
+            return {
+                "requeued": recovered,
+                "dead_lettered": dead_lettered,
+                "state_path": str(self.state_path),
+                "events_path": str(self.events_path),
+            }
 
     def register_slot(
         self,
@@ -425,6 +657,12 @@ class FabricStore:
         priority: int = 100,
         dedupe_key: str | None = None,
         metadata: dict[str, Any] | None = None,
+        kind: str = "campaign",
+        item_type: str | None = None,
+        payload: dict[str, Any] | None = None,
+        source_campaign: str | None = None,
+        source_round: str | None = None,
+        source_slot: str | None = None,
     ) -> dict[str, Any]:
         with _fabric_lock():
             state = self._load_state()
@@ -437,11 +675,12 @@ class FabricStore:
             now = _now()
             item = FabricWorkItem(
                 work_item_id=str(uuid4()),
-                kind="campaign",
+                kind=kind,
                 status="pending",
                 lane=lane,
                 target_mode=target_mode,
                 project=project,
+                item_type=item_type or kind,
                 benchmark=benchmark,
                 namespace=namespace,
                 slot_label=slot_label,
@@ -449,18 +688,24 @@ class FabricStore:
                 donor_task_id=donor_task_id or base_task_id,
                 priority=int(priority),
                 dedupe_key=dedupe_key,
+                source_campaign=source_campaign,
+                source_round=source_round,
+                source_slot=source_slot or slot_label,
+                payload=dict(payload or {}),
                 metadata=dict(metadata or {}),
                 created_at=now,
                 updated_at=now,
             ).to_dict()
             state.setdefault("work_items", {})[item["work_item_id"]] = item
-            self._queue_append_unique(state.setdefault("queues", {}).setdefault("pending", []), item["work_item_id"])
+            self._register_pending_transport_locked(state, item)
             self._queue_sort_pending(state)
             self._save_state(state)
             self._append_event(
                 event_type="work_item_enqueued",
                 work_item_id=item["work_item_id"],
                 details={
+                    "item_type": item.get("item_type"),
+                    "queue_name": item.get("queue_name"),
                     "lane": lane,
                     "target_mode": target_mode,
                     "project": project,
@@ -487,56 +732,145 @@ class FabricStore:
             filters = dict(slot.get("claim_filters") or {})
             if claim_filters:
                 filters.update(claim_filters)
-            for item_id in list(state.setdefault("queues", {}).setdefault("pending", [])):
-                item = state.setdefault("work_items", {}).get(item_id)
-                if not item or str(item.get("status") or "") != "pending":
-                    self._queue_remove(state["queues"]["pending"], item_id)
-                    continue
-                if not self._lane_matches(item, filters):
-                    continue
-                now = _now()
-                lease_expires_at = (datetime.now(timezone.utc) + timedelta(seconds=max(60, int(lease_seconds)))).isoformat()
-                claim_token = str(uuid4())
-                item["status"] = "claimed"
-                item["claim_token"] = claim_token
-                item["claimed_by_slot"] = slot_id
-                item["claimed_at"] = now
-                item["last_heartbeat_at"] = now
-                item["lease_duration_seconds"] = max(60, int(lease_seconds))
-                item["lease_expires_at"] = lease_expires_at
-                item["attempt_count"] = int(item.get("attempt_count") or 0) + 1
-                item["updated_at"] = now
-                self._queue_remove(state["queues"]["pending"], item_id)
-                self._queue_append_unique(state["queues"].setdefault("claimed", []), item_id)
-                state.setdefault("claims", {})[claim_token] = self._claim_record(
-                    claim_token=claim_token,
-                    work_item_id=item_id,
-                    slot_id=slot_id,
-                    lease_expires_at=lease_expires_at,
-                )
-                slot["status"] = "claimed"
-                slot["current_work_item_id"] = item_id
-                slot["current_claim_token"] = claim_token
-                slot["last_claimed_at"] = now
-                slot["last_heartbeat_at"] = now
-                slot["claims_total"] = int(slot.get("claims_total") or 0) + 1
-                slot["updated_at"] = now
-                state.setdefault("metrics", {})["claims_total"] = int(state["metrics"].get("claims_total") or 0) + 1
-                self._save_state(state)
-                self._append_event(
-                    event_type="work_item_claimed",
-                    work_item_id=item_id,
-                    slot_id=slot_id,
-                    claim_token=claim_token,
-                    details={
-                        "lane": item.get("lane"),
-                        "project": item.get("project"),
-                        "namespace": item.get("namespace"),
-                        "lease_seconds": item.get("lease_duration_seconds"),
-                    },
-                )
-                return item
-            return None
+            queue_name = self._continuation_queue_name(
+                namespace=str(slot.get("namespace") or "") or None,
+                slot_label=str(slot.get("label") or slot_id),
+            )
+            claim = self.queue.claim(
+                queue_name,
+                lease_ttl=max(60, int(lease_seconds)),
+                timeout=0,
+                lease_owner=slot_id,
+            )
+            if not claim:
+                return None
+            item_id = str(claim.get("item_id") or claim.get("payload") or "")
+            item = state.setdefault("work_items", {}).get(item_id)
+            if not item:
+                self.queue.nack(queue_name, item_id)
+                return None
+            if not self._lane_matches(item, filters):
+                self.queue.nack(queue_name, item_id)
+                return None
+            claim_token = str(uuid4())
+            item["lease_duration_seconds"] = max(60, int(lease_seconds))
+            self._mark_claimed_locked(
+                state,
+                item=item,
+                slot_id=slot_id,
+                claim_token=claim_token,
+                lease_expires_at=str(claim.get("lease_until") or ""),
+                retry_count=int(claim.get("retry_count") or 0),
+            )
+            self._save_state(state)
+            self._append_event(
+                event_type="work_item_claimed",
+                work_item_id=item_id,
+                slot_id=slot_id,
+                claim_token=claim_token,
+                details={
+                    "item_type": item.get("item_type"),
+                    "queue_name": queue_name,
+                    "lane": item.get("lane"),
+                    "project": item.get("project"),
+                    "namespace": item.get("namespace"),
+                    "lease_seconds": item.get("lease_duration_seconds"),
+                },
+            )
+            return item
+
+    def claim_feedback_work_item(
+        self,
+        *,
+        campaign_task_id: str,
+        namespace: str | None,
+        lease_seconds: int = 300,
+        consumer_id: str | None = None,
+        allowed_item_types: list[str] | None = None,
+    ) -> dict[str, Any] | None:
+        self.scavenge_expired_claims()
+        with _fabric_lock():
+            state = self._load_state()
+            queue_name = self._feedback_queue_name(namespace=namespace, campaign_task_id=campaign_task_id)
+            claim = self.queue.claim(
+                queue_name,
+                lease_ttl=max(60, int(lease_seconds)),
+                timeout=0,
+                lease_owner=consumer_id or campaign_task_id,
+            )
+            if not claim:
+                return None
+            item_id = str(claim.get("item_id") or claim.get("payload") or "")
+            item = state.setdefault("work_items", {}).get(item_id)
+            if not item:
+                self.queue.nack(queue_name, item_id)
+                return None
+            if allowed_item_types and str(item.get("item_type") or "") not in set(allowed_item_types):
+                self.queue.nack(queue_name, item_id)
+                return None
+            claim_token = str(uuid4())
+            item["lease_duration_seconds"] = max(60, int(lease_seconds))
+            self._mark_claimed_locked(
+                state,
+                item=item,
+                slot_id=consumer_id or campaign_task_id,
+                claim_token=claim_token,
+                lease_expires_at=str(claim.get("lease_until") or ""),
+                retry_count=int(claim.get("retry_count") or 0),
+            )
+            self._save_state(state)
+            self._append_event(
+                event_type="planning_feedback_claimed",
+                work_item_id=item_id,
+                slot_id=consumer_id or campaign_task_id,
+                claim_token=claim_token,
+                campaign_task_id=campaign_task_id,
+                details={
+                    "item_type": item.get("item_type"),
+                    "queue_name": queue_name,
+                    "source_campaign": item.get("source_campaign"),
+                    "source_round": item.get("source_round"),
+                },
+            )
+            return item
+
+    def ack_feedback_work_item(
+        self,
+        *,
+        work_item_id: str,
+        ack_source: str,
+    ) -> dict[str, Any] | None:
+        with _fabric_lock():
+            state = self._load_state()
+            item = state.setdefault("work_items", {}).get(work_item_id)
+            if not item:
+                return None
+            claim_token = str(item.get("claim_token") or "")
+            claim = state.setdefault("claims", {}).get(claim_token) if claim_token else None
+            item["status"] = "completed"
+            item["completion_reason"] = ack_source
+            item["completed_at"] = _now()
+            self._ack_item_locked(
+                state,
+                item=item,
+                claim=claim,
+                slot_id=str(item.get("claimed_by_slot") or "") or None,
+                final_status="completed",
+            )
+            self._save_state(state)
+            self._append_event(
+                event_type="planning_feedback_acked",
+                work_item_id=work_item_id,
+                slot_id=item.get("source_slot"),
+                claim_token=claim_token or None,
+                campaign_task_id=item.get("source_campaign"),
+                details={
+                    "item_type": item.get("item_type"),
+                    "ack_source": ack_source,
+                    "queue_name": item.get("queue_name"),
+                },
+            )
+            return item
 
     def bind_claim_to_campaign(
         self,
@@ -658,11 +992,21 @@ class FabricStore:
                 return None
             now = _now()
             lease_seconds = max(60, int(item.get("lease_duration_seconds") or 300))
-            lease_expires_at = (datetime.now(timezone.utc) + timedelta(seconds=lease_seconds)).isoformat()
+            queue_name = str(item.get("queue_name") or self._queue_name_for_item(item))
+            renewed = self.queue.renew_lease(
+                queue_name,
+                str(item.get("item_id") or item.get("work_item_id") or ""),
+                lease_ttl=lease_seconds,
+                lease_owner=str(binding.get("slot_id") or "") or None,
+            )
+            lease_expires_at = str((renewed or {}).get("lease_until") or (datetime.now(timezone.utc) + timedelta(seconds=lease_seconds)).isoformat())
             item["last_status"] = status
             item["campaign_round_count"] = int(round_count)
             item["last_heartbeat_at"] = now
             item["lease_expires_at"] = lease_expires_at
+            item["lease_until"] = lease_expires_at
+            item["lease_owner"] = str(binding.get("slot_id") or "") or item.get("lease_owner")
+            item["ack_state"] = "processing"
             if metrics:
                 item.setdefault("metadata", {})["last_metrics"] = dict(metrics)
             item["updated_at"] = now
@@ -751,8 +1095,13 @@ class FabricStore:
             item["completion_reason"] = completed_reason
             item["completed_at"] = now
             item["updated_at"] = now
-            self._queue_remove(state.setdefault("queues", {}).setdefault("claimed", []), work_item_id)
-            self._queue_append_unique(state["queues"].setdefault("completed", []), work_item_id)
+            self._ack_item_locked(
+                state,
+                item=item,
+                claim=claim,
+                slot_id=str(binding.get("slot_id") or "") or None,
+                final_status="completed",
+            )
             slot_id = str(binding.get("slot_id") or "")
             slot = state.setdefault("slots", {}).get(slot_id)
             if slot:
@@ -764,9 +1113,6 @@ class FabricStore:
                 slot["last_heartbeat_at"] = now
                 slot["completions_total"] = int(slot.get("completions_total") or 0) + 1
                 slot["updated_at"] = now
-            if claim:
-                claim["status"] = "completed"
-                claim["updated_at"] = now
             binding["status"] = "completed"
             binding["updated_at"] = now
             continuation_item = None
@@ -835,8 +1181,13 @@ class FabricStore:
             item["failure_reason"] = failure_reason
             item["last_status"] = "failed"
             item["updated_at"] = now
-            self._queue_remove(state.setdefault("queues", {}).setdefault("claimed", []), work_item_id)
-            self._queue_append_unique(state["queues"].setdefault("failed", []), work_item_id)
+            self._ack_item_locked(
+                state,
+                item=item,
+                claim=claim,
+                slot_id=str(binding.get("slot_id") or "") or None,
+                final_status="failed",
+            )
             slot_id = str(binding.get("slot_id") or "")
             slot = state.setdefault("slots", {}).get(slot_id)
             if slot:
@@ -847,9 +1198,6 @@ class FabricStore:
                 slot["last_heartbeat_at"] = now
                 slot["failures_total"] = int(slot.get("failures_total") or 0) + 1
                 slot["updated_at"] = now
-            if claim:
-                claim["status"] = "failed"
-                claim["updated_at"] = now
             binding["status"] = "failed"
             binding["updated_at"] = now
             requeued_item = None
@@ -921,6 +1269,55 @@ class FabricStore:
                 for slot_id, slot in (state.get("slots") or {}).items()
                 if str(slot.get("namespace") or "") == namespace
             }
+            event_payload = _read_json(self.events_path, _initial_events())
+            filtered_events = [
+                event
+                for event in (event_payload.get("events") or [])
+                if str(event.get("work_item_id") or "") in filtered_work_items
+            ]
+            filtered_metrics = {
+                "claims_total": 0,
+                "completed_total": 0,
+                "failed_total": 0,
+                "requeued_total": 0,
+                "continuations_total": 0,
+                "nacked_total": 0,
+                "dead_letter_total": 0,
+                "recovered_total": 0,
+                "campaign_claim_count": 0,
+                "campaign_ack_count": 0,
+                "continuation_claim_count": 0,
+                "continuation_ack_count": 0,
+                "coverage_claim_count": 0,
+                "coverage_ack_count": 0,
+                "candidate_bridge_claim_count": 0,
+                "candidate_bridge_ack_count": 0,
+                "family_promotion_claim_count": 0,
+                "family_promotion_ack_count": 0,
+            }
+            for event in filtered_events:
+                event_type = str(event.get("event_type") or "")
+                item = filtered_work_items.get(str(event.get("work_item_id") or ""), {})
+                item_type = str(item.get("item_type") or item.get("kind") or "campaign")
+                if event_type in {"work_item_claimed", "planning_feedback_claimed"}:
+                    filtered_metrics["claims_total"] += 1
+                    metric_field = self._metric_field(item_type, suffix="claim_count")
+                    filtered_metrics[metric_field] = int(filtered_metrics.get(metric_field) or 0) + 1
+                elif event_type in {"work_item_completed", "planning_feedback_acked"}:
+                    filtered_metrics["completed_total"] += 1
+                    metric_field = self._metric_field(item_type, suffix="ack_count")
+                    filtered_metrics[metric_field] = int(filtered_metrics.get(metric_field) or 0) + 1
+                elif event_type == "work_item_failed":
+                    filtered_metrics["failed_total"] += 1
+                    metric_field = self._metric_field(item_type, suffix="ack_count")
+                    filtered_metrics[metric_field] = int(filtered_metrics.get(metric_field) or 0) + 1
+                elif event_type == "claim_expired_requeued":
+                    filtered_metrics["requeued_total"] += 1
+                    filtered_metrics["recovered_total"] += 1
+                elif event_type == "work_item_dead_lettered":
+                    filtered_metrics["dead_letter_total"] += 1
+                elif event_type == "continuation_requested":
+                    filtered_metrics["continuations_total"] += 1
             return {
                 "state_path": str(self.state_path),
                 "events_path": str(self.events_path),
@@ -929,5 +1326,6 @@ class FabricStore:
                     "work_items": filtered_work_items,
                     "queues": queue_payload,
                     "slots": filtered_slots,
+                    "metrics": filtered_metrics,
                 },
             }

@@ -452,6 +452,22 @@ def _infer_lane(campaign_task_id: str, *, benchmark: str, target_mode: str) -> s
     return "source"
 
 
+def _campaign_fabric_context(campaign_task_id: str) -> dict[str, Any]:
+    payload = _read_json(task_root(campaign_task_id) / "task.json", {})
+    metadata = payload.get("metadata") or {}
+    runtime = payload.get("runtime") or {}
+    return {
+        "namespace": (
+            str(runtime.get("fabric_namespace") or metadata.get("fabric_namespace") or "").strip() or None
+        ),
+        "slot_label": (
+            str(runtime.get("slot_controller_label") or metadata.get("slot_controller_label") or "").strip()
+            or str(metadata.get("benchmark") or "").strip()
+            or campaign_task_id
+        ),
+    }
+
+
 def claim_planning_feedback(
     *,
     campaign_task_id: str,
@@ -463,6 +479,7 @@ def claim_planning_feedback(
     family = _read_json(system_family_inventory_path(), _initial_family_inventory())
     candidates = _read_json(system_candidate_queue_path(), _initial_candidate_queue())
     harness_key = _safe_name(selected_harness)
+    fabric_context = _campaign_fabric_context(campaign_task_id)
 
     def _select(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         filtered = []
@@ -475,17 +492,59 @@ def claim_planning_feedback(
         filtered.sort(key=lambda x: (int(x.get("priority") or 0), int(x.get("hit_count") or 0)), reverse=True)
         return filtered[:limit]
 
+    claimed_feedback_items: list[dict[str, Any]] = []
+    claimed_coverage: list[dict[str, Any]] = []
+    claimed_candidates: list[dict[str, Any]] = []
+    claimed_family: list[dict[str, Any]] = []
+    fabric = FabricStore()
+    for _ in range(max(1, min(int(limit), 4))):
+        item = fabric.claim_feedback_work_item(
+            campaign_task_id=campaign_task_id,
+            namespace=fabric_context.get("namespace"),
+            lease_seconds=300,
+            consumer_id=f"planning::{campaign_task_id}",
+            allowed_item_types=["coverage", "candidate_bridge", "family_promotion"],
+        )
+        if not item:
+            break
+        claimed_feedback_items.append(
+            {
+                "item_id": item.get("item_id") or item.get("work_item_id"),
+                "item_type": item.get("item_type"),
+                "source_campaign": item.get("source_campaign"),
+                "source_round": item.get("source_round"),
+                "source_slot": item.get("source_slot"),
+                "queue_name": item.get("queue_name"),
+            }
+        )
+        payload = dict(item.get("payload") or {})
+        if str(item.get("item_type") or "") == "coverage":
+            claimed_coverage.extend(list(payload.get("coverage_entries") or []))
+        elif str(item.get("item_type") or "") == "candidate_bridge":
+            claimed_candidates.extend(list(payload.get("candidate_entries") or []))
+        elif str(item.get("item_type") or "") == "family_promotion":
+            claimed_family.extend(list(payload.get("family_entries") or []))
+        fabric.ack_feedback_work_item(
+            work_item_id=str(item.get("work_item_id") or ""),
+            ack_source="planning_feedback_consumed",
+        )
+    claimed_uncovered = [item for item in claimed_coverage if str(item.get("queue_kind") or "") == "uncovered"]
+    claimed_low_growth = [item for item in claimed_coverage if str(item.get("queue_kind") or "") == "low_growth"]
+    claimed_stalled = [item for item in claimed_coverage if str(item.get("queue_kind") or "") == "stalled"]
+
     return {
-        "system_uncovered_functions": _select(list(coverage.get("uncovered_functions") or [])),
-        "system_low_growth_functions": _select(list(coverage.get("low_growth_functions") or [])),
-        "system_stalled_targets": _select(list(coverage.get("stalled_targets") or [])),
-        "system_candidate_bridge": _select(list(candidates.get("candidates") or [])),
+        "system_uncovered_functions": _select(list(coverage.get("uncovered_functions") or []) + claimed_uncovered),
+        "system_low_growth_functions": _select(list(coverage.get("low_growth_functions") or []) + claimed_low_growth),
+        "system_stalled_targets": _select(list(coverage.get("stalled_targets") or []) + claimed_stalled),
+        "system_candidate_bridge": _select(list(candidates.get("candidates") or []) + claimed_candidates),
         "system_trace_worthy_candidates": _select(list(candidates.get("trace_worthy") or [])),
-        "system_family_feedback_queue": _select(list(family.get("family_feedback_queue") or [])),
+        "system_family_feedback_queue": _select(list(family.get("family_feedback_queue") or []) + claimed_family),
         "per_harness_low_yield": (coverage.get("per_harness_low_yield") or {}).get(harness_key, {}),
         "system_coverage_queue_path": str(system_coverage_queue_path()),
         "system_candidate_queue_path": str(system_candidate_queue_path()),
         "system_family_inventory_path": str(system_family_inventory_path()),
+        "claimed_feedback_items": claimed_feedback_items,
+        "claimed_feedback_item_count": len(claimed_feedback_items),
     }
 
 
@@ -804,6 +863,7 @@ def update_after_round(
                         "name": name,
                         "target_mode": target_mode,
                         "harness": selected_harness,
+                        "queue_kind": "uncovered",
                         "priority": 50,
                         "source_campaign_task_id": campaign_task_id,
                         "source_round_task_id": round_task_id,
@@ -820,6 +880,7 @@ def update_after_round(
                         "name": name,
                         "target_mode": target_mode,
                         "harness": selected_harness,
+                        "queue_kind": "low_growth",
                         "priority": 60,
                         "source_campaign_task_id": campaign_task_id,
                         "source_round_task_id": round_task_id,
@@ -835,6 +896,7 @@ def update_after_round(
                     "name": stalled_name,
                     "target_mode": target_mode,
                     "harness": selected_harness,
+                    "queue_kind": "stalled",
                     "priority": 70,
                     "source_campaign_task_id": campaign_task_id,
                     "source_round_task_id": round_task_id,
@@ -887,6 +949,7 @@ def update_after_round(
                     "name": feedback_name,
                     "target_mode": target_mode,
                     "harness": selected_harness,
+                    "queue_kind": "family_promotion",
                     "priority": 80,
                     "source_campaign_task_id": campaign_task_id,
                     "source_round_task_id": round_task_id,
@@ -910,6 +973,7 @@ def update_after_round(
                 "candidate_kind": "suspicious_no_crash_coverage_or_low_growth",
                 "target_mode": target_mode,
                 "harness": selected_harness,
+                "queue_kind": "candidate_bridge",
                 "priority": 65,
                 "source_campaign_task_id": campaign_task_id,
                 "source_round_task_id": round_task_id,
@@ -927,6 +991,7 @@ def update_after_round(
                 ):
                     trace_item = dict(existing)
                     trace_item["candidate_kind"] = "trace_worthy_suspicious_no_crash"
+                    trace_item["queue_kind"] = "candidate_bridge"
                     trace_item["priority"] = 90
                     trace_item["trace_gate"] = "queue_when_replayable_input_available"
                     _upsert_named(candidates.setdefault("trace_worthy", []), trace_item, key_fields=("target_mode", "candidate_kind", "name"))
@@ -935,6 +1000,7 @@ def update_after_round(
                 "name": suspicious_name,
                 "target_mode": target_mode,
                 "harness": selected_harness,
+                "queue_kind": "candidate_bridge",
                 "priority": 75,
                 "source_campaign_task_id": campaign_task_id,
                 "source_round_task_id": round_task_id,
@@ -943,6 +1009,119 @@ def update_after_round(
             _upsert_named(candidates.setdefault("reseed_requests", []), reseed_item, key_fields=("target_mode", "name"))
         candidates["updated_at"] = now_iso
         _write_json(system_candidate_queue_path(), candidates)
+
+        fabric_context = _campaign_fabric_context(campaign_task_id)
+
+        def _current_round_entries(items: list[dict[str, Any]], *, queue_kind: str | None = None, limit: int = 8) -> list[dict[str, Any]]:
+            selected: list[dict[str, Any]] = []
+            seen: set[tuple[str, str]] = set()
+            for entry in items:
+                if not isinstance(entry, dict):
+                    continue
+                if str(entry.get("source_round_task_id") or "") != round_task_id:
+                    continue
+                key = (str(entry.get("queue_kind") or queue_kind or ""), str(entry.get("name") or ""))
+                if key in seen:
+                    continue
+                seen.add(key)
+                payload = dict(entry)
+                if queue_kind and not payload.get("queue_kind"):
+                    payload["queue_kind"] = queue_kind
+                selected.append(payload)
+                if len(selected) >= limit:
+                    break
+            return selected
+
+        coverage_feedback_entries = (
+            _current_round_entries(list(coverage.get("uncovered_functions") or []), queue_kind="uncovered")
+            + _current_round_entries(list(coverage.get("low_growth_functions") or []), queue_kind="low_growth")
+            + _current_round_entries(list(coverage.get("stalled_targets") or []), queue_kind="stalled")
+        )[:10]
+        if coverage_feedback_entries:
+            FabricStore().enqueue_work_item(
+                lane=lane,
+                target_mode=target_mode,
+                project=project,
+                benchmark=str(fabric_context.get("slot_label") or project),
+                namespace=fabric_context.get("namespace"),
+                slot_label=str(fabric_context.get("slot_label") or campaign_task_id),
+                base_task_id=campaign_task_id,
+                donor_task_id=campaign_task_id,
+                priority=75,
+                dedupe_key=f"fabric-feedback::{campaign_task_id}::{round_task_id}::coverage",
+                kind="coverage",
+                item_type="coverage",
+                payload={
+                    "coverage_entries": coverage_feedback_entries,
+                    "system_coverage_queue_path": str(system_coverage_queue_path()),
+                },
+                source_campaign=campaign_task_id,
+                source_round=round_task_id,
+                source_slot=str(fabric_context.get("slot_label") or campaign_task_id),
+                metadata={
+                    "feedback_reason": "round_coverage_feedback",
+                    "system_coverage_queue_path": str(system_coverage_queue_path()),
+                },
+            )
+
+        candidate_feedback_entries = (
+            _current_round_entries(list(candidates.get("candidates") or []), queue_kind="candidate_bridge")
+            + _current_round_entries(list(candidates.get("trace_worthy") or []), queue_kind="candidate_bridge")
+        )[:10]
+        if candidate_feedback_entries:
+            FabricStore().enqueue_work_item(
+                lane=lane,
+                target_mode=target_mode,
+                project=project,
+                benchmark=str(fabric_context.get("slot_label") or project),
+                namespace=fabric_context.get("namespace"),
+                slot_label=str(fabric_context.get("slot_label") or campaign_task_id),
+                base_task_id=campaign_task_id,
+                donor_task_id=campaign_task_id,
+                priority=70,
+                dedupe_key=f"fabric-feedback::{campaign_task_id}::{round_task_id}::candidate",
+                kind="candidate_bridge",
+                item_type="candidate_bridge",
+                payload={
+                    "candidate_entries": candidate_feedback_entries,
+                    "system_candidate_queue_path": str(system_candidate_queue_path()),
+                },
+                source_campaign=campaign_task_id,
+                source_round=round_task_id,
+                source_slot=str(fabric_context.get("slot_label") or campaign_task_id),
+                metadata={
+                    "feedback_reason": "round_candidate_bridge_feedback",
+                    "system_candidate_queue_path": str(system_candidate_queue_path()),
+                },
+            )
+
+        family_feedback_entries = _current_round_entries(list(family.get("family_feedback_queue") or []), queue_kind="family_promotion")
+        if family_feedback_entries:
+            FabricStore().enqueue_work_item(
+                lane=lane,
+                target_mode=target_mode,
+                project=project,
+                benchmark=str(fabric_context.get("slot_label") or project),
+                namespace=fabric_context.get("namespace"),
+                slot_label=str(fabric_context.get("slot_label") or campaign_task_id),
+                base_task_id=campaign_task_id,
+                donor_task_id=campaign_task_id,
+                priority=68,
+                dedupe_key=f"fabric-feedback::{campaign_task_id}::{round_task_id}::family",
+                kind="family_promotion",
+                item_type="family_promotion",
+                payload={
+                    "family_entries": family_feedback_entries,
+                    "system_family_inventory_path": str(system_family_inventory_path()),
+                },
+                source_campaign=campaign_task_id,
+                source_round=round_task_id,
+                source_slot=str(fabric_context.get("slot_label") or campaign_task_id),
+                metadata={
+                    "feedback_reason": "round_family_feedback",
+                    "system_family_inventory_path": str(system_family_inventory_path()),
+                },
+            )
 
     return {
         "system_fabric_root": str(system_fabric_root()),

@@ -28,6 +28,8 @@ class FabricWorkItem:
     lane: str
     target_mode: str
     project: str
+    item_id: str | None = None
+    item_type: str | None = None
     benchmark: str | None = None
     namespace: str | None = None
     slot_label: str | None = None
@@ -41,6 +43,11 @@ class FabricWorkItem:
     last_heartbeat_at: str | None = None
     lease_duration_seconds: int = 0
     lease_expires_at: str | None = None
+    queue_name: str | None = None
+    lease_owner: str | None = None
+    lease_until: str | None = None
+    ack_state: str = "pending"
+    retry_count: int = 0
     attempt_count: int = 0
     requeue_count: int = 0
     campaign_task_id: str | None = None
@@ -49,6 +56,13 @@ class FabricWorkItem:
     completion_reason: str | None = None
     failure_reason: str | None = None
     completed_at: str | None = None
+    acked_at: str | None = None
+    nacked_at: str | None = None
+    dead_lettered_at: str | None = None
+    source_campaign: str | None = None
+    source_round: str | None = None
+    source_slot: str | None = None
+    payload: dict[str, Any] = field(default_factory=dict)
     continuation: FabricContinuation = field(default_factory=FabricContinuation)
     metadata: dict[str, Any] = field(default_factory=dict)
     created_at: str | None = None
@@ -56,6 +70,13 @@ class FabricWorkItem:
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
+        payload["item_id"] = payload.get("item_id") or payload.get("work_item_id")
+        payload["item_type"] = payload.get("item_type") or payload.get("kind")
+        payload["queue_name"] = payload.get("queue_name")
+        payload["lease_owner"] = payload.get("lease_owner") or payload.get("claimed_by_slot")
+        payload["lease_until"] = payload.get("lease_until") or payload.get("lease_expires_at")
+        payload["ack_state"] = payload.get("ack_state") or payload.get("status") or "pending"
+        payload["retry_count"] = int(payload.get("retry_count") or payload.get("requeue_count") or 0)
         payload["continuation"] = self.continuation.to_dict()
         return payload
 
