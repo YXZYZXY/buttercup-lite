@@ -38,7 +38,9 @@ def _artifact_signature(path: Path) -> tuple[int, int]:
 @dataclass
 class _ProgramModelIndex:
     task_id: str
+    task_dir: Path
     index_dir: Path
+    task_src_dir: Path
     built_at: str
     build_duration_ms: float
     signature: tuple[tuple[int, int], ...]
@@ -91,7 +93,9 @@ def _build_index(task_id: str) -> _ProgramModelIndex:
     build_duration_ms = round((time.perf_counter() - started) * 1000.0, 3)
     return _ProgramModelIndex(
         task_id=task_id,
+        task_dir=task_dir,
         index_dir=index_dir,
+        task_src_dir=task_dir / "src",
         built_at=time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         build_duration_ms=build_duration_ms,
         signature=_index_signature(index_dir),
@@ -143,6 +147,36 @@ class ProgramModelRuntimeView:
         if not normalized:
             return {}
         return dict(self.index.facts_by_name.get(normalized) or {})
+
+    def _fact_source_file(self, fact: dict[str, Any]) -> Path | None:
+        candidate = fact.get("source_file")
+        if not candidate:
+            # Current function_facts emitters usually write the source location into `file`.
+            candidate = fact.get("file")
+        if not candidate:
+            return None
+        path = Path(str(candidate))
+        if not path.is_absolute():
+            path = self.index.task_dir / path
+        return path
+
+    def _fact_in_task_src_scope(self, fact: dict[str, Any]) -> bool:
+        source_file = self._fact_source_file(fact)
+        if source_file is None:
+            return True
+        task_src_dir = self.index.task_src_dir
+        if not task_src_dir.exists():
+            return True
+        try:
+            source_file.relative_to(task_src_dir)
+            return True
+        except ValueError:
+            return False
+
+    def _scope_results(self, results: list[dict[str, Any]], *, scope_to_task_src: bool) -> list[dict[str, Any]]:
+        if not scope_to_task_src:
+            return results
+        return [item for item in results if self._fact_in_task_src_scope(item)]
 
     def _record_query(self, query_name: str, target: Any, result_count: int, *, extra: dict[str, Any] | None = None) -> None:
         self.query_call_count += 1
@@ -251,7 +285,7 @@ class ProgramModelRuntimeView:
         )
         return payload
 
-    def get_callers(self, func_name: str, depth: int = 2) -> list[dict[str, Any]]:
+    def get_callers(self, func_name: str, depth: int = 2, scope_to_task_src: bool = True) -> list[dict[str, Any]]:
         normalized = self._normalize_name(func_name)
         results = self._bfs(
             roots=[normalized],
@@ -260,10 +294,11 @@ class ProgramModelRuntimeView:
             source="pm_callers",
             depth=max(1, int(depth)),
         )
+        results = self._scope_results(results, scope_to_task_src=scope_to_task_src)
         self._record_query("get_callers", normalized, len(results), extra={"depth": int(depth)})
         return results
 
-    def get_callees(self, func_name: str, depth: int = 2) -> list[dict[str, Any]]:
+    def get_callees(self, func_name: str, depth: int = 2, scope_to_task_src: bool = True) -> list[dict[str, Any]]:
         normalized = self._normalize_name(func_name)
         results = self._bfs(
             roots=[normalized],
@@ -272,10 +307,11 @@ class ProgramModelRuntimeView:
             source="pm_callees",
             depth=max(1, int(depth)),
         )
+        results = self._scope_results(results, scope_to_task_src=scope_to_task_src)
         self._record_query("get_callees", normalized, len(results), extra={"depth": int(depth)})
         return results
 
-    def get_slice_by_entry(self, entry_func: str) -> list[dict[str, Any]]:
+    def get_slice_by_entry(self, entry_func: str, scope_to_task_src: bool = True) -> list[dict[str, Any]]:
         normalized = self._normalize_name(entry_func)
         fact = self._fact(normalized)
         results: list[dict[str, Any]] = []
@@ -298,6 +334,7 @@ class ProgramModelRuntimeView:
                 max_nodes=96,
             )
         )
+        results = self._scope_results(results, scope_to_task_src=scope_to_task_src)
         self._record_query("get_slice_by_entry", normalized, len(results))
         return results
 
