@@ -48,8 +48,27 @@ def _write_text(path: Path, content: str) -> str:
     return str(path)
 
 
-def _llm_fields(metadata_obj) -> dict[str, object]:
-    return metadata_obj.to_dict()
+def _llm_fields(metadata_obj, *, elapsed_seconds: float | None = None) -> dict[str, object]:
+    payload = metadata_obj.to_dict()
+    request_count = int(payload.get("llm_request_count") or 0)
+    success_count = 1 if (
+        payload.get("llm_real_call_verified")
+        and payload.get("llm_response_received")
+        and not payload.get("llm_failure_reason")
+    ) else 0
+    failure_count = 1 if (
+        payload.get("llm_request_attempted")
+        and not success_count
+        and (payload.get("llm_failure_reason") or request_count > 0)
+    ) else 0
+    payload.setdefault("llm_success_count", success_count)
+    payload.setdefault("llm_failure_count", failure_count)
+    if payload.get("api_calls_per_hour") is None:
+        if elapsed_seconds and elapsed_seconds > 0 and request_count > 0:
+            payload["api_calls_per_hour"] = round((request_count * 3600.0) / elapsed_seconds, 6)
+        else:
+            payload["api_calls_per_hour"] = 0.0
+    return payload
 
 
 def _clean_policy_fields(metadata: dict[str, object]) -> dict[str, object]:
@@ -181,6 +200,7 @@ def _apply_binary_contract_shaping(
 
 def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) -> None:
     logger.info("binary seed received task %s", task_id)
+    worker_started_monotonic = time.monotonic()
     task_store.update_status(
         task_id,
         TaskStatus.BINARY_SEEDING,
@@ -455,12 +475,19 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
         task_partition=task_partition,
         requested_seed_backend=seed_generation_backend,
         actual_seed_backend=backend_used,
-        llm_metadata=_llm_fields(llm_metadata),
+        llm_metadata=_llm_fields(
+            llm_metadata,
+            elapsed_seconds=max(time.monotonic() - worker_started_monotonic, 1e-6),
+        ),
         seed_provenance=seed_provenance,
         prompt_template_id=f"binary_seed::{seed_decision.mode.lower()}",
         task_should_fail_if_llm_missing=require_real_llm,
         fallback_used=fallback_non_llm_used,
         fallback_reason=llm_metadata.llm_failure_reason if fallback_non_llm_used else None,
+    )
+    llm_fields = _llm_fields(
+        llm_metadata,
+        elapsed_seconds=max(time.monotonic() - worker_started_monotonic, 1e-6),
     )
     manifest_payload = {
         "task_id": task_id,
@@ -504,7 +531,7 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
         "llm_temperature": llm_temperature,
         "llm_max_tokens": llm_max_tokens,
         **parser_metadata,
-        **_llm_fields(llm_metadata),
+        **llm_fields,
         **policy,
         "binary_seed_provenance": seed_provenance,
         "task_partition": task_partition,
@@ -597,7 +624,7 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
             "cached_seed_count": cached_seed_count,
             "fallback_non_llm_used": fallback_non_llm_used,
             **llm_audit_paths,
-            **_llm_fields(llm_metadata),
+            **llm_fields,
         },
     )
     contamination_report["source_seed_imported_count"] = 0
@@ -635,7 +662,7 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
             "seed_generation_backend": backend_used,
             "llm_used": llm_used,
             **parser_metadata,
-            **_llm_fields(llm_metadata),
+            **llm_fields,
             **policy,
             "seed_provenance": seed_provenance,
             "task_partition": task_partition,
