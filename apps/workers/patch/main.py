@@ -111,6 +111,11 @@ def _patch_creation_runtime_fields(creation_payload: dict[str, object]) -> dict[
         "patch_llm_real_call_verified": creation_payload.get("patch_llm_real_call_verified"),
         "patch_semantic_strength": creation_payload.get("patch_semantic_strength"),
         "patch_ground_truth_mode": creation_payload.get("patch_ground_truth_mode"),
+        "patch_synthesis_type": creation_payload.get("patch_synthesis_type"),
+        "patch_synthesis_reason": creation_payload.get("patch_synthesis_reason"),
+        "prompt_template_id": creation_payload.get("prompt_template_id"),
+        "known_fix_path_reached": creation_payload.get("known_fix_path_reached"),
+        "deterministic_template_applied": creation_payload.get("deterministic_template_applied"),
         "llm_selection_confidence": creation_payload.get("llm_selection_confidence"),
         "llm_selection_fallback_triggered": creation_payload.get("llm_selection_fallback_triggered"),
         "llm_vs_rule_agreement": creation_payload.get("llm_vs_rule_agreement"),
@@ -569,7 +574,7 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
             "selected_final_strategy": attempts[-1].get("strategy") if attempts else None,
             "final_qe_verdict": qe_verdict,
             "final_action": action,
-            "deterministic_template_role": "fallback_or_materialization_helper_only",
+            "deterministic_template_role": "not_used_in_blind_mainline",
         }
         retry_manifest_path = patch_reflection_retry_manifest_path(task_id)
         retry_manifest_path.parent.mkdir(parents=True, exist_ok=True)

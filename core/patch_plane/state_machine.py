@@ -45,6 +45,17 @@ from core.utils.settings import expand_local_path, resolve_int_setting, resolve_
 
 logger = logging.getLogger("patch-plane-state-machine")
 
+PATCH_GROUND_TRUTH_BLIND = "blind"
+PATCH_GROUND_TRUTH_IMPORT_ASSISTED = "import_assisted"
+PATCH_GROUND_TRUTH_KNOWN_FIX = "known_fix"
+
+PATCH_SYNTHESIS_BOUNDS_CHECK = "bounds_check"
+PATCH_SYNTHESIS_NULL_CHECK = "null_check"
+PATCH_SYNTHESIS_FAILURE_PROPAGATION = "failure_propagation"
+PATCH_SYNTHESIS_LLM_OPEN_ENDED = "llm_open_ended"
+
+NON_BLIND_PATCH_CHANNELS = {"offline_eval", "benchmark_fixture"}
+
 
 def _write(path: Path, payload: dict[str, Any]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -54,13 +65,51 @@ def _write(path: Path, payload: dict[str, Any]) -> Path:
 
 def _normalize_patch_ground_truth_mode(mode: str | None) -> str:
     normalized = str(mode or "").strip().lower()
-    if normalized in {"blind", "benchmark_assisted"}:
+    legacy_aliases = {
+        "benchmark_assisted": PATCH_GROUND_TRUTH_IMPORT_ASSISTED,
+        "known_fix_assisted": PATCH_GROUND_TRUTH_KNOWN_FIX,
+    }
+    normalized = legacy_aliases.get(normalized, normalized)
+    if normalized in {
+        PATCH_GROUND_TRUTH_BLIND,
+        PATCH_GROUND_TRUTH_IMPORT_ASSISTED,
+        PATCH_GROUND_TRUTH_KNOWN_FIX,
+    }:
         return normalized
-    return "blind"
+    return PATCH_GROUND_TRUTH_BLIND
+
+
+def _truthy(value: Any) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _patch_ground_truth_channel(metadata: dict[str, Any]) -> str:
+    return str(
+        metadata.get("PATCH_GROUND_TRUTH_CHANNEL")
+        or metadata.get("patch_ground_truth_channel")
+        or ""
+    ).strip().lower()
+
+
+def _ground_truth_assistance_allowed(metadata: dict[str, Any]) -> bool:
+    if _truthy(metadata.get("PATCH_ALLOW_GROUND_TRUTH_ASSISTANCE")):
+        return True
+    return _patch_ground_truth_channel(metadata) in NON_BLIND_PATCH_CHANNELS
+
+
+def _resolve_patch_ground_truth_mode(metadata: dict[str, Any]) -> str:
+    requested_mode = _normalize_patch_ground_truth_mode(
+        resolve_text_setting(metadata, "PATCH_GROUND_TRUTH_MODE", settings.patch_ground_truth_mode)
+    )
+    if requested_mode == PATCH_GROUND_TRUTH_BLIND:
+        return requested_mode
+    if _ground_truth_assistance_allowed(metadata):
+        return requested_mode
+    return PATCH_GROUND_TRUTH_BLIND
 
 
 def _ground_truth_sort_bonus(ground_truth_dependency: Any, patch_ground_truth_mode: str) -> float:
-    if patch_ground_truth_mode != "benchmark_assisted":
+    if patch_ground_truth_mode != PATCH_GROUND_TRUTH_IMPORT_ASSISTED:
         return 0.0
     normalized = str(ground_truth_dependency or "").strip().lower()
     if normalized == "high":
@@ -373,6 +422,8 @@ def _extract_json_object(raw_text: str) -> dict[str, Any]:
 
 
 def _patch_provenance_from_strategy(strategy: str) -> str:
+    if _strategy_declared_synthesis_type(strategy) is not None:
+        return "blind_semantic_strategy"
     if strategy.startswith("semantic_guard_"):
         return "deterministic_rule"
     if strategy.startswith("known_fix_"):
@@ -383,6 +434,8 @@ def _patch_provenance_from_strategy(strategy: str) -> str:
 
 
 def _patch_semantic_strength_from_strategy(strategy: str) -> str:
+    if _strategy_declared_synthesis_type(strategy) is not None:
+        return "general_semantic_fix"
     if strategy.startswith("semantic_guard_"):
         return "general_semantic_fix"
     if strategy.startswith("known_fix_"):
@@ -671,10 +724,149 @@ def _select_symbolized_fallback_frame(
     return preferred_frames[0] if preferred_frames else secondary_frames[0] if secondary_frames else {}
 
 
+def _strategy_declared_synthesis_type(strategy: str | None) -> str | None:
+    normalized = str(strategy or "").strip().lower()
+    if any(token in normalized for token in ("bounds", "offset", "length")):
+        return PATCH_SYNTHESIS_BOUNDS_CHECK
+    if any(token in normalized for token in ("null", "allocator", "ownership")):
+        return PATCH_SYNTHESIS_NULL_CHECK
+    if any(token in normalized for token in ("failure", "return_early", "error", "guard")):
+        return PATCH_SYNTHESIS_FAILURE_PROPAGATION
+    return None
+
+
+def _infer_patch_synthesis_type_from_blob(evidence_blob: str, strategy: str | None = None) -> tuple[str, str]:
+    declared = _strategy_declared_synthesis_type(strategy)
+    if declared is not None:
+        return declared, f"strategy_declared:{strategy}"
+
+    normalized = str(evidence_blob or "").lower()
+    bounds_tokens = (
+        "buffer-overflow",
+        "out-of-bounds",
+        "heap-buffer-overflow",
+        "stack-buffer-overflow",
+        "global-buffer-overflow",
+        "offset",
+        "length",
+        "capacity",
+        "copy",
+        "memcpy",
+        "memmove",
+        "strcpy",
+        "strncpy",
+        "strlen",
+        "index",
+        "bound",
+    )
+    null_tokens = (
+        "null",
+        "nullptr",
+        "0x000000000000",
+        "segv on unknown address",
+        "realloc",
+        "allocator",
+        "ownership",
+        "dereference",
+    )
+    failure_tokens = (
+        "fail",
+        "error",
+        "invalid",
+        "return",
+        "status",
+        "errno",
+        "unexpected eof",
+        "short read",
+        "propagate",
+    )
+    if any(token in normalized for token in bounds_tokens):
+        return PATCH_SYNTHESIS_BOUNDS_CHECK, "evidence_detected:bounds_or_overflow"
+    if any(token in normalized for token in null_tokens):
+        return PATCH_SYNTHESIS_NULL_CHECK, "evidence_detected:null_or_allocator"
+    if any(token in normalized for token in failure_tokens):
+        return PATCH_SYNTHESIS_FAILURE_PROPAGATION, "evidence_detected:failure_propagation"
+    return PATCH_SYNTHESIS_LLM_OPEN_ENDED, "evidence_detected:unclassified"
+
+
+def _patch_prompt_template_id(synthesis_type: str) -> str:
+    return {
+        PATCH_SYNTHESIS_BOUNDS_CHECK: "blind_bounds_check_v1",
+        PATCH_SYNTHESIS_NULL_CHECK: "blind_null_check_v1",
+        PATCH_SYNTHESIS_FAILURE_PROPAGATION: "blind_failure_propagation_v1",
+    }.get(synthesis_type, "blind_open_ended_v1")
+
+
+def _patch_system_prompt(synthesis_type: str) -> str:
+    prompts = {
+        PATCH_SYNTHESIS_BOUNDS_CHECK: (
+            "You are repairing a source bug by adding a bounds check before a crash-relevant access. "
+            "Return strict JSON only. Produce a minimal unified diff relative to the source root. "
+            "Validate index, offset, length, capacity, or copy size before the access, and stop or return an error "
+            "if the precondition is violated. Preserve intended behavior for valid inputs. "
+            "Do not invent filenames or functions that are not present in the supplied context."
+        ),
+        PATCH_SYNTHESIS_NULL_CHECK: (
+            "You are repairing a source bug by adding a null or allocator-state check before a crash-relevant dereference. "
+            "Return strict JSON only. Produce a minimal unified diff relative to the source root. "
+            "Guard pointer dereferences, allocator return values, or ownership transitions so execution does not continue "
+            "with a null or stale pointer. Preserve intended behavior for valid inputs and valid allocations. "
+            "Do not invent filenames or functions that are not present in the supplied context."
+        ),
+        PATCH_SYNTHESIS_FAILURE_PROPAGATION: (
+            "You are repairing a source bug by checking a failure condition and propagating that failure before execution continues. "
+            "Return strict JSON only. Produce a minimal unified diff relative to the source root. "
+            "Detect the crash-relevant error or invalid return value, then return, short-circuit, or propagate the failure "
+            "instead of continuing into the unsafe state. Preserve intended behavior for valid inputs. "
+            "Do not invent filenames or functions that are not present in the supplied context."
+        ),
+    }
+    return prompts.get(
+        synthesis_type,
+        (
+            "You are repairing an unclassified source vulnerability. Return strict JSON only. "
+            "Produce a minimal unified diff relative to the source root. "
+            "Prioritize a correct, compilable fix that eliminates the crash path while preserving intended behavior. "
+            "Do not invent filenames or functions that are not present in the supplied context."
+        ),
+    )
+
+
+def _patch_user_instruction(synthesis_type: str) -> str:
+    instructions = {
+        PATCH_SYNTHESIS_BOUNDS_CHECK: (
+            "Generate a patch that adds the smallest complete bounds check before the crash-relevant access. "
+            "Prefer validating length, index, capacity, or copy size in the same function that performs the access."
+        ),
+        PATCH_SYNTHESIS_NULL_CHECK: (
+            "Generate a patch that adds the smallest complete non-null or allocator-state check before the crash-relevant dereference. "
+            "If allocation or growth fails, preserve state and return instead of continuing."
+        ),
+        PATCH_SYNTHESIS_FAILURE_PROPAGATION: (
+            "Generate a patch that checks the relevant return value, validation result, or error state and propagates failure early. "
+            "Do not continue execution after the crash-relevant failure has been detected."
+        ),
+    }
+    return instructions.get(
+        synthesis_type,
+        "Generate the smallest safe repair diff you can justify from the trace, root cause, and code context.",
+    )
+
+
+def _known_fix_path_reached(*, patch_ground_truth_mode: str, strategy: str, selected_candidate: dict[str, Any] | None) -> bool:
+    if patch_ground_truth_mode == PATCH_GROUND_TRUTH_KNOWN_FIX:
+        return True
+    if str(strategy or "").startswith("known_fix_"):
+        return True
+    candidate_strategy = str((selected_candidate or {}).get("strategy") or "")
+    return candidate_strategy.startswith("known_fix_")
+
+
 def _build_generic_open_ended_patch_messages(
     *,
     task_id: str,
     strategy: str,
+    patch_synthesis_type: str,
     metadata: dict[str, Any],
     runtime: dict[str, Any],
 ) -> list[dict[str, Any]]:
@@ -705,7 +897,9 @@ def _build_generic_open_ended_patch_messages(
             "output_format": "strict_json_with_proposed_patch_diff",
             "diff_format": "unified_diff_relative_to_source_root",
             "semantic_goal": "eliminate_the_crash_path_without_changing_intended_behavior",
-            "strategy_constraint": "open_ended_no_named_strategy_requirement",
+            "strategy_constraint": "blind_generic_repair",
+            "patch_synthesis_type": patch_synthesis_type,
+            "prompt_template_id": _patch_prompt_template_id(patch_synthesis_type),
         },
     }
     return [
@@ -715,17 +909,12 @@ def _build_generic_open_ended_patch_messages(
                 {
                     "type": "text",
                     "text": (
-                        "You are repairing an unclassified source vulnerability. Return strict JSON only. "
-                        "Produce a minimal unified diff relative to the source root. "
-                        "Do not limit yourself to named strategy families; prioritize a correct, compilable fix "
-                        "that preserves intended behavior for non-crashing inputs. "
-                        "The diff MUST use paths relative to the source root. "
-                        "Do NOT use absolute paths or add extra directory prefixes like 'src/'. "
-                        "For example, use 'cJSON.c', not 'src/cJSON.c' or '/app/src/cJSON.c'. "
-                        "Do NOT invent or hallucinate filenames or function names. "
-                        "Only reference files and functions explicitly provided in the context above. "
-                        "If you cannot generate a valid patch from the given context, return an empty "
-                        "string for proposed_patch_diff."
+                        _patch_system_prompt(patch_synthesis_type)
+                        + " The diff MUST use paths relative to the source root. "
+                        + "Do NOT use absolute paths or add extra directory prefixes like 'src/'. "
+                        + "Use a simple relative path such as 'foo.c', not 'src/foo.c' or '/abs/path/foo.c'. "
+                        + "If you cannot generate a valid patch from the given context, return an empty "
+                        + "string for proposed_patch_diff."
                     ),
                 }
             ],
@@ -738,10 +927,11 @@ def _build_generic_open_ended_patch_messages(
                     "text": (
                         "Return JSON with keys: patch_intent, confidence, proposed_patch_diff. "
                         "proposed_patch_diff must be a unified diff relative to the source root. "
-                        "Use the root-cause location and crash evidence below. If you cannot produce a safe diff, "
-                        "return an empty proposed_patch_diff instead of prose. "
-                        "Do not use absolute paths or add extra directory prefixes like 'src/'. "
-                        "Only reference files and functions explicitly provided in the context below.\n\n"
+                        + _patch_user_instruction(patch_synthesis_type)
+                        + " Use the root-cause location and crash evidence below. If you cannot produce a safe diff, "
+                        + "return an empty proposed_patch_diff instead of prose. "
+                        + "Do not use absolute paths or add extra directory prefixes like 'src/'. "
+                        + "Only reference files and functions explicitly provided in the context below.\n\n"
                         + json.dumps(payload, ensure_ascii=False, indent=2)
                     ),
                 }
@@ -754,6 +944,7 @@ def _generic_llm_open_ended_synthesis(
     *,
     task_id: str,
     strategy: str,
+    patch_synthesis_type: str,
     source_root: Path,
     metadata: dict[str, Any],
     runtime: dict[str, Any],
@@ -780,6 +971,7 @@ def _generic_llm_open_ended_synthesis(
     messages = _build_generic_open_ended_patch_messages(
         task_id=task_id,
         strategy=strategy,
+        patch_synthesis_type=patch_synthesis_type,
         metadata=metadata,
         runtime=runtime,
     )
@@ -836,15 +1028,23 @@ def _apply_patch_strategy(
     task_id: str,
     vuln_id: str,
     strategy: str,
+    patch_synthesis_type: str,
     source_root: Path,
     metadata: dict[str, Any],
     runtime: dict[str, Any],
     generated_at: str,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     if strategy == "intentionally_broken":
-        source_file = source_root / "cJSON.c"
-        if not source_file.exists():
-            source_file = source_root / "ini.c"
+        source_file = next(
+            (
+                candidate
+                for candidate in source_root.rglob("*")
+                if candidate.is_file() and candidate.suffix in {".c", ".cc", ".cpp"}
+            ),
+            None,
+        )
+        if source_file is None:
+            raise RuntimeError("intentionally_broken validation scenario could not find a C-family source file")
         original = source_file.read_text(encoding="utf-8")
         patched = "BROKEN_PATCH_TOKEN(\n" + original
         source_file.write_text(patched, encoding="utf-8")
@@ -871,6 +1071,7 @@ def _apply_patch_strategy(
     return _generic_llm_open_ended_synthesis(
         task_id=task_id,
         strategy=strategy,
+        patch_synthesis_type=patch_synthesis_type,
         source_root=source_root,
         metadata=metadata,
         runtime=runtime,
@@ -1051,9 +1252,7 @@ def _try_apply_freeform_patch(
 def _rank_patch_candidates(*, vuln_id: str, metadata: dict[str, Any], runtime: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     scenario = str(metadata.get("patch_creation_strategy", "trace_ranked_semantic"))
     task_id = str(metadata.get("patch_base_task_id") or metadata.get("task_id") or "")
-    patch_ground_truth_mode = _normalize_patch_ground_truth_mode(
-        resolve_text_setting(metadata, "PATCH_GROUND_TRUTH_MODE", settings.patch_ground_truth_mode)
-    )
+    patch_ground_truth_mode = _resolve_patch_ground_truth_mode(metadata)
     alignment = _load_json(patch_root_cause_alignment_manifest_path(task_id))
     if not alignment:
         alignment = _trace_alignment(metadata, runtime)
@@ -1073,6 +1272,9 @@ def _rank_patch_candidates(*, vuln_id: str, metadata: dict[str, Any], runtime: d
                 "selection_reason": "validation scenario explicitly requests a broken patch path",
                 "generalizable": False,
                 "ground_truth_dependency": "none",
+                "patch_synthesis_type": PATCH_SYNTHESIS_LLM_OPEN_ENDED,
+                "patch_synthesis_reason": "validation_scenario:intentionally_broken",
+                "prompt_template_id": _patch_prompt_template_id(PATCH_SYNTHESIS_LLM_OPEN_ENDED),
             },
         ]
         selected = {
@@ -1086,16 +1288,63 @@ def _rank_patch_candidates(*, vuln_id: str, metadata: dict[str, Any], runtime: d
     root_cause = _load_json(patch_root_cause_manifest_path(task_id))
     context_manifest = _load_json(patch_context_manifest_path(task_id))
     selected_context = context_manifest.get("selected_context") or {}
+    traced_crash = _load_traced_crash(runtime)
+    alignment_payload = alignment.get("alignment") or alignment
+    symbolized_frames = alignment_payload.get("symbolized_frames") or []
     evidence_blob = " ".join(
         [
             selected_trace_function,
+            str(root_cause.get("function") or ""),
+            str(root_cause.get("file") or ""),
             str(root_cause.get("hypothesis") or ""),
+            str(traced_crash.get("crash_type") or ""),
+            str(traced_crash.get("crash_state") or ""),
             str(selected_context.get("snippet") or ""),
+            " ".join(
+                " ".join(
+                    str(frame.get(key) or "")
+                    for key in ("function", "file", "raw_frame")
+                )
+                for frame in symbolized_frames[:6]
+            ),
         ]
     ).lower()
 
     def _has_any(*tokens: str) -> bool:
         return any(token in evidence_blob for token in tokens)
+
+    inferred_primary_synthesis_type, inferred_primary_synthesis_reason = _infer_patch_synthesis_type_from_blob(evidence_blob)
+    bounds_signal = _has_any(
+        "buffer-overflow",
+        "out-of-bounds",
+        "heap-buffer-overflow",
+        "stack-buffer-overflow",
+        "global-buffer-overflow",
+        "offset",
+        "length",
+        "bound",
+        "copy",
+        "capacity",
+        "strlen",
+        "buffer",
+        "memcpy",
+        "memmove",
+        "strcpy",
+        "strncpy",
+        "index",
+    )
+    null_signal = _has_any(
+        "null",
+        "nullptr",
+        "0x000000000000",
+        "segv on unknown address",
+        "realloc",
+        "free",
+        "delete",
+        "ownership",
+        "allocator",
+    )
+    failure_signal = _has_any("fail", "error", "invalid", "return", "status", "errno", "unexpected eof", "short read")
 
     candidates = [
         {
@@ -1103,48 +1352,60 @@ def _rank_patch_candidates(*, vuln_id: str, metadata: dict[str, Any], runtime: d
             "candidate_id": "root_cause_direct_repair",
             "strategy": "root_cause_direct_repair",
             "strategy_family": "root_cause_direct_repair",
-            "ranking_score": 0.84 if selected_trace_function else 0.72,
+            "ranking_score": 0.66 if selected_trace_function else 0.58,
             "selection_reason": "repair the trace-primary frame directly and keep the fix scoped to the observed crash-adjacent logic.",
             "description": "Rewrite the trace-adjacent statement or branch that directly drives the crashing state.",
             "priority": "high",
             "generalizable": True,
             "ground_truth_dependency": "none",
+            "patch_synthesis_type": inferred_primary_synthesis_type,
+            "patch_synthesis_reason": inferred_primary_synthesis_reason,
+            "prompt_template_id": _patch_prompt_template_id(inferred_primary_synthesis_type),
         },
         {
             "rank": 2,
             "candidate_id": "bounds_parser_state_repair",
             "strategy": "bounds_parser_state_repair",
             "strategy_family": "parser_bounds_state_repair",
-            "ranking_score": 0.8 if _has_any("offset", "length", "bound", "copy", "capacity", "strlen", "buffer") else 0.61,
+            "ranking_score": 0.94 if bounds_signal else 0.56,
             "selection_reason": "trace/context suggest a parser-local bounds, offset, or state-transition inconsistency.",
             "description": "Add or rewrite local bounds/state checks around the parser path that leads into the crash.",
             "priority": "high",
             "generalizable": True,
             "ground_truth_dependency": "none",
+            "patch_synthesis_type": PATCH_SYNTHESIS_BOUNDS_CHECK,
+            "patch_synthesis_reason": "candidate_family:bounds",
+            "prompt_template_id": _patch_prompt_template_id(PATCH_SYNTHESIS_BOUNDS_CHECK),
         },
         {
             "rank": 3,
             "candidate_id": "allocator_null_state_repair",
             "strategy": "allocator_null_state_repair",
             "strategy_family": "allocator_or_ownership_repair",
-            "ranking_score": 0.79 if _has_any("realloc", "free", "delete", "null", "ownership", "allocator") else 0.58,
+            "ranking_score": 0.92 if null_signal else 0.55,
             "selection_reason": "trace/context suggest stale ownership, allocator failure, or null-state continuation near the crash.",
             "description": "Repair allocator/null-state handling so stale pointers or failed growth do not continue into the crash path.",
             "priority": "high",
             "generalizable": True,
             "ground_truth_dependency": "none",
+            "patch_synthesis_type": PATCH_SYNTHESIS_NULL_CHECK,
+            "patch_synthesis_reason": "candidate_family:null",
+            "prompt_template_id": _patch_prompt_template_id(PATCH_SYNTHESIS_NULL_CHECK),
         },
         {
             "rank": 4,
             "candidate_id": "failure_propagation_rewrite",
             "strategy": "failure_propagation_rewrite",
             "strategy_family": "failure_propagation_guard",
-            "ranking_score": 0.76 if _has_any("fail", "error", "invalid", "return", "null") else 0.55,
+            "ranking_score": 0.9 if failure_signal else 0.54,
             "selection_reason": "trace/context suggest an invalid state is detected but execution continues into the crash-producing path.",
             "description": "Short-circuit on the first crash-relevant failure and preserve parser state invariants.",
             "priority": "medium",
             "generalizable": True,
             "ground_truth_dependency": "none",
+            "patch_synthesis_type": PATCH_SYNTHESIS_FAILURE_PROPAGATION,
+            "patch_synthesis_reason": "candidate_family:failure_propagation",
+            "prompt_template_id": _patch_prompt_template_id(PATCH_SYNTHESIS_FAILURE_PROPAGATION),
         },
         {
             "rank": 5,
@@ -1157,6 +1418,9 @@ def _rank_patch_candidates(*, vuln_id: str, metadata: dict[str, Any], runtime: d
             "priority": "medium",
             "generalizable": True,
             "ground_truth_dependency": "none",
+            "patch_synthesis_type": inferred_primary_synthesis_type,
+            "patch_synthesis_reason": inferred_primary_synthesis_reason,
+            "prompt_template_id": _patch_prompt_template_id(inferred_primary_synthesis_type),
         },
     ]
     ranked_candidates: list[dict[str, Any]] = []
@@ -1179,6 +1443,7 @@ def _rank_patch_candidates(*, vuln_id: str, metadata: dict[str, Any], runtime: d
                 "patch_ground_truth_mode": patch_ground_truth_mode,
                 "vulnerable_invariant_alignment": aligned_invariants,
                 "vulnerable_invariant_alignment_score": invariant_alignment_score,
+                "prompt_template_id": candidate.get("prompt_template_id"),
             }
         )
         alignment_rows.append(
@@ -1186,6 +1451,7 @@ def _rank_patch_candidates(*, vuln_id: str, metadata: dict[str, Any], runtime: d
                 "candidate_id": candidate.get("candidate_id"),
                 "strategy": candidate.get("strategy"),
                 "strategy_family": candidate.get("strategy_family"),
+                "patch_synthesis_type": candidate.get("patch_synthesis_type"),
                 "aligned_invariants": aligned_invariants,
                 "alignment_score": invariant_alignment_score,
                 "effective_score": round(effective_score, 4),
@@ -1254,6 +1520,9 @@ def _build_patch_llm_messages(
                 "candidate_id": candidate.get("candidate_id"),
                 "strategy": candidate.get("strategy"),
                 "strategy_family": candidate.get("strategy_family"),
+                "patch_synthesis_type": candidate.get("patch_synthesis_type"),
+                "patch_synthesis_reason": candidate.get("patch_synthesis_reason"),
+                "prompt_template_id": candidate.get("prompt_template_id"),
                 "description": candidate.get("description"),
                 "priority": candidate.get("priority"),
                 "selection_reason": candidate.get("selection_reason"),
@@ -1280,6 +1549,8 @@ def _build_patch_llm_messages(
                     "text": (
                         "You are selecting the best semantic patch proposal for a confirmed vulnerability. "
                         "Return strict JSON only. Prefer the most generalizable candidate aligned to the trace/root-cause frame. "
+                        "Prefer one of the generic blind repair families (bounds_check, null_check, failure_propagation) "
+                        "when the crash evidence supports it. "
                         "Rank candidates by trace, context, and invariant evidence only. "
                         "Do not mention markdown fences."
                     ),
@@ -1294,7 +1565,7 @@ def _build_patch_llm_messages(
                     "text": (
                         "Choose the best patch candidate from the list below and explain why it aligns with the trace/root-cause. "
                         "Return JSON with keys: selected_candidate_id, selected_strategy_family, "
-                        "root_cause_frame, patch_intent, confidence, deterministic_materialization_ok, proposed_patch_diff. "
+                        "patch_synthesis_type, root_cause_frame, patch_intent, confidence, deterministic_materialization_ok, proposed_patch_diff. "
                         "If you can express a safe source edit as a unified diff relative to the source root, include it in proposed_patch_diff. "
                         "If you are not confident in an exact diff, set proposed_patch_diff to an empty string rather than inventing paths. "
                         "If previous_failed_attempt is present, repair that concrete failure. Do not repeat a diff that leaves stale commented code, duplicate braces, truncated hunks, or uncompilable C syntax. "
@@ -1321,12 +1592,16 @@ def _build_candidate_specific_materialization_messages(
     selected_context = context_manifest.get("selected_context") or {}
     trace_alignment = _load_json(patch_root_cause_alignment_manifest_path(task_id)).get("alignment") or {}
     invariant_report = _load_invariant_report(task_id)
+    patch_synthesis_type = str(selected_candidate.get("patch_synthesis_type") or PATCH_SYNTHESIS_LLM_OPEN_ENDED)
     payload = {
         "task_id": task_id,
         "selected_candidate": {
             "candidate_id": selected_candidate.get("candidate_id"),
             "strategy": selected_candidate.get("strategy"),
             "strategy_family": selected_candidate.get("strategy_family"),
+            "patch_synthesis_type": patch_synthesis_type,
+            "patch_synthesis_reason": selected_candidate.get("patch_synthesis_reason"),
+            "prompt_template_id": selected_candidate.get("prompt_template_id"),
             "description": selected_candidate.get("description"),
             "priority": selected_candidate.get("priority"),
             "selection_reason": selected_candidate.get("selection_reason"),
@@ -1364,16 +1639,14 @@ def _build_candidate_specific_materialization_messages(
                 {
                     "type": "text",
                     "text": (
-                        "You generate a source patch as a unified diff. Return strict JSON only. "
-                        "Do not re-rank candidates. Materialize a diff for the already-selected candidate. "
-                        "Keep the diff minimal, compilable C, and aligned to the stated invariant. "
-                        "The diff MUST use paths relative to the source root. "
-                        "Do NOT use absolute paths or add extra directory prefixes like 'src/'. "
-                        "For example, use 'cJSON.c', not 'src/cJSON.c' or '/app/src/cJSON.c'. "
-                        "Do NOT invent or hallucinate filenames or function names. "
-                        "Only reference files and functions explicitly provided in the context above. "
-                        "If you cannot generate a valid patch from the given context, return an empty "
-                        "string for proposed_patch_diff."
+                        _patch_system_prompt(patch_synthesis_type)
+                        + " Do not re-rank candidates. Materialize a diff for the already-selected candidate. "
+                        + "Keep the diff minimal, compilable C, and aligned to the stated invariant. "
+                        + "The diff MUST use paths relative to the source root. "
+                        + "Do NOT use absolute paths or add extra directory prefixes like 'src/'. "
+                        + "Use a simple relative path such as 'foo.c', not 'src/foo.c' or '/abs/path/foo.c'. "
+                        + "If you cannot generate a valid patch from the given context, return an empty "
+                        + "string for proposed_patch_diff."
                     ),
                 }
             ],
@@ -1384,12 +1657,13 @@ def _build_candidate_specific_materialization_messages(
                 {
                     "type": "text",
                     "text": (
-                        "Return JSON with keys: selected_candidate_id, patch_intent, confidence, proposed_patch_diff. "
+                        "Return JSON with keys: selected_candidate_id, patch_synthesis_type, patch_intent, confidence, proposed_patch_diff. "
                         "selected_candidate_id must match the provided candidate. "
                         "If the previous diff was malformed, repair it. If the previous diff targeted the wrong family, rewrite it for this exact candidate. "
-                        "Do not emit markdown fences. Only emit a unified diff relative to the source root. "
-                        "Do not use absolute paths or add extra directory prefixes like 'src/'. "
-                        "Only reference files and functions explicitly provided in the context below.\n\n"
+                        + _patch_user_instruction(patch_synthesis_type)
+                        + " Do not emit markdown fences. Only emit a unified diff relative to the source root. "
+                        + "Do not use absolute paths or add extra directory prefixes like 'src/'. "
+                        + "Only reference files and functions explicitly provided in the context below.\n\n"
                         + json.dumps(payload, ensure_ascii=False, indent=2)
                     ),
                 }
@@ -1741,9 +2015,7 @@ def write_patch_creation(
         metadata=metadata,
         runtime=runtime,
     )
-    patch_ground_truth_mode = _normalize_patch_ground_truth_mode(
-        resolve_text_setting(metadata, "PATCH_GROUND_TRUTH_MODE", settings.patch_ground_truth_mode)
-    )
+    patch_ground_truth_mode = _resolve_patch_ground_truth_mode(metadata)
     rule_rank1_candidate = candidate_ranking[0] if candidate_ranking else None
     llm_messages = _build_patch_llm_messages(
         task_id=task_id,
@@ -1874,6 +2146,14 @@ def write_patch_creation(
                 candidate_specific_materialization_error = str(exc)
                 llm_patch_payload["candidate_specific_materialization_error"] = candidate_specific_materialization_error
     strategy = str(selected_candidate.get("strategy") or metadata.get("patch_creation_strategy", "root_cause_direct_repair"))
+    patch_synthesis_type = str(selected_candidate.get("patch_synthesis_type") or PATCH_SYNTHESIS_LLM_OPEN_ENDED)
+    patch_synthesis_reason = str(selected_candidate.get("patch_synthesis_reason") or "candidate_selection_default")
+    prompt_template_id = str(selected_candidate.get("prompt_template_id") or _patch_prompt_template_id(patch_synthesis_type))
+    known_fix_path_reached = _known_fix_path_reached(
+        patch_ground_truth_mode=patch_ground_truth_mode,
+        strategy=strategy,
+        selected_candidate=selected_candidate,
+    )
     freeform_result, freeform_manifest = _try_apply_freeform_patch(
         task_id=task_id,
         source_root=patched_source_root,
@@ -1882,14 +2162,15 @@ def write_patch_creation(
     )
     if freeform_result and llm_metadata.llm_real_call_verified:
         patch_result = freeform_result
-        materialization_mode = "llm_freeform_unified_diff"
+        materialization_mode = "blind_llm_unified_diff"
         deterministic_template_applied = False
-        deterministic_dependency_level = "fallback_available_not_used"
+        deterministic_dependency_level = "not_used"
     else:
         patch_result, generic_fallback_state = _apply_patch_strategy(
             task_id=task_id,
             vuln_id=vuln_id,
             strategy=strategy,
+            patch_synthesis_type=patch_synthesis_type,
             source_root=patched_source_root,
             metadata=metadata,
             runtime=runtime,
@@ -1911,17 +2192,21 @@ def write_patch_creation(
                 freeform_manifest["generic_open_ended_fallback"] = generic_freeform_manifest
         if patch_result is not None:
             if generic_fallback_state.get("used"):
-                materialization_mode = "generic_llm_open_ended_diff"
+                materialization_mode = (
+                    "blind_llm_typed_repair_diff"
+                    if patch_synthesis_type != PATCH_SYNTHESIS_LLM_OPEN_ENDED
+                    else "blind_llm_open_ended_repair_diff"
+                )
                 deterministic_template_applied = False
-                deterministic_dependency_level = "generic_llm_open_ended_fallback"
+                deterministic_dependency_level = "blind_llm_fallback"
             else:
-                materialization_mode = "deterministic_template_helper"
-                deterministic_template_applied = True
-                deterministic_dependency_level = "materialization_only" if llm_selected_candidate else "primary_path"
+                materialization_mode = "manual_validation_scenario"
+                deterministic_template_applied = False
+                deterministic_dependency_level = "manual_validation_scenario"
         else:
-            materialization_mode = "generic_llm_open_ended_failed"
+            materialization_mode = "blind_llm_patch_generation_failed"
             deterministic_template_applied = False
-            deterministic_dependency_level = "generic_llm_open_ended_failed"
+            deterministic_dependency_level = "blind_llm_patch_generation_failed"
     llm_selection_fallback_triggered = _llm_selection_fallback_triggered(
         selection_source=llm_selection_source,
         llm_selected_candidate=llm_selected_candidate,
@@ -1937,6 +2222,10 @@ def write_patch_creation(
         "generated_at": now,
         "patch_target_vuln_id": vuln_id,
         "patch_ground_truth_mode": patch_ground_truth_mode,
+        "patch_synthesis_type": patch_synthesis_type,
+        "patch_synthesis_reason": patch_synthesis_reason,
+        "prompt_template_id": prompt_template_id,
+        "known_fix_path_reached": known_fix_path_reached,
         "candidate_ranking": candidate_ranking,
         "selected_candidate": selected_candidate,
         "rule_rank1_candidate": rule_rank1_candidate,
@@ -1952,6 +2241,9 @@ def write_patch_creation(
             "generated_at": now,
             "patch_target_vuln_id": vuln_id,
             "patch_ground_truth_mode": patch_ground_truth_mode,
+            "patch_synthesis_type": patch_synthesis_type,
+            "prompt_template_id": prompt_template_id,
+            "known_fix_path_reached": known_fix_path_reached,
             "selection_source": llm_selection_source,
             "rule_rank1_candidate": rule_rank1_candidate,
             "llm_selected_candidate": llm_selected_candidate,
@@ -1976,6 +2268,8 @@ def write_patch_creation(
                 {
                     "strategy_family": candidate.get("strategy_family"),
                     "strategy": candidate.get("strategy"),
+                    "patch_synthesis_type": candidate.get("patch_synthesis_type"),
+                    "prompt_template_id": candidate.get("prompt_template_id"),
                     "generalizable": candidate.get("generalizable"),
                     "ground_truth_dependency": candidate.get("ground_truth_dependency"),
                     "sort_weight_gt_bonus": candidate.get("sort_weight_gt_bonus"),
@@ -1990,6 +2284,10 @@ def write_patch_creation(
         "generated_at": now,
         "patch_target_vuln_id": vuln_id,
         "patch_ground_truth_mode": patch_ground_truth_mode,
+        "patch_synthesis_type": patch_synthesis_type,
+        "patch_synthesis_reason": patch_synthesis_reason,
+        "prompt_template_id": prompt_template_id,
+        "known_fix_path_reached": known_fix_path_reached,
         "selected_strategy": strategy,
         "selected_strategy_family": selected_candidate.get("strategy_family"),
         "selected_strategy_reason": selected_candidate.get("selection_reason"),
@@ -2007,6 +2305,10 @@ def write_patch_creation(
             "generated_at": now,
             "patch_target_vuln_id": vuln_id,
             "patch_ground_truth_mode": patch_ground_truth_mode,
+            "patch_synthesis_type": patch_synthesis_type,
+            "patch_synthesis_reason": patch_synthesis_reason,
+            "prompt_template_id": prompt_template_id,
+            "known_fix_path_reached": known_fix_path_reached,
             "selected_candidate": selected_candidate,
             "selected_trace_alignment_path": str(patch_root_cause_alignment_manifest_path(task_id)),
             "selected_target_function": runtime.get("selected_target_function"),
@@ -2029,12 +2331,16 @@ def write_patch_creation(
             "generated_at": now,
             "patch_target_vuln_id": vuln_id,
             "patch_ground_truth_mode": patch_ground_truth_mode,
+            "patch_synthesis_type": patch_synthesis_type,
+            "prompt_template_id": prompt_template_id,
+            "known_fix_path_reached": known_fix_path_reached,
             "selected_candidate": selected_candidate.get("candidate_id"),
             "selected_candidate_ground_truth_dependency": selected_candidate.get("ground_truth_dependency"),
             "all_candidates": [
                 {
                     "candidate_id": candidate.get("candidate_id"),
                     "strategy": candidate.get("strategy"),
+                    "patch_synthesis_type": candidate.get("patch_synthesis_type"),
                     "ground_truth_dependency": candidate.get("ground_truth_dependency"),
                     "generalizable": candidate.get("generalizable"),
                     "sort_weight_gt_bonus": candidate.get("sort_weight_gt_bonus"),
@@ -2051,6 +2357,9 @@ def write_patch_creation(
             "generated_at": now,
             "patch_target_vuln_id": vuln_id,
             "patch_ground_truth_mode": patch_ground_truth_mode,
+            "patch_synthesis_type": patch_synthesis_type,
+            "prompt_template_id": prompt_template_id,
+            "known_fix_path_reached": known_fix_path_reached,
             "selection_source": llm_selection_source,
             "llm_selection_confidence": llm_selection_confidence,
             "llm_selection_fallback_triggered": llm_selection_fallback_triggered,
@@ -2066,6 +2375,10 @@ def write_patch_creation(
             "generated_at": now,
             "patch_target_vuln_id": vuln_id,
             "patch_ground_truth_mode": patch_ground_truth_mode,
+            "patch_synthesis_type": patch_synthesis_type,
+            "patch_synthesis_reason": patch_synthesis_reason,
+            "prompt_template_id": prompt_template_id,
+            "known_fix_path_reached": known_fix_path_reached,
             "selected_candidate": selected_candidate,
             "selection_source": llm_selection_source,
             "llm_selection_confidence": llm_selection_confidence,
@@ -2088,6 +2401,9 @@ def write_patch_creation(
             "generated_at": now,
             "patch_target_vuln_id": vuln_id,
             "patch_ground_truth_mode": patch_ground_truth_mode,
+            "patch_synthesis_type": patch_synthesis_type,
+            "prompt_template_id": prompt_template_id,
+            "known_fix_path_reached": known_fix_path_reached,
             "selection_source": llm_selection_source,
             "deterministic_template_applied": deterministic_template_applied,
             "selected_strategy": strategy,
@@ -2101,21 +2417,21 @@ def write_patch_creation(
             "generated_at": now,
             "patch_target_vuln_id": vuln_id,
             "patch_ground_truth_mode": patch_ground_truth_mode,
+            "patch_synthesis_type": patch_synthesis_type,
+            "prompt_template_id": prompt_template_id,
+            "known_fix_path_reached": known_fix_path_reached,
             "llm_freeform_diff_present": freeform_manifest.get("llm_freeform_diff_present"),
             "llm_freeform_applied": freeform_manifest.get("freeform_applied"),
             "candidate_specific_materialization_used": bool(candidate_specific_materialization_payload),
             "materialization_mode": materialization_mode,
             "deterministic_template_applied": deterministic_template_applied,
-            "deterministic_template_role": "fallback_or_helper",
+            "deterministic_template_role": "not_used",
             "selected_candidate": selected_candidate,
             "llm_patch_payload": llm_patch_payload,
             "comparison_verdict": (
-                "llm_generic_open_ended_patch_text_used"
-                if materialization_mode == "generic_llm_open_ended_diff"
-                else
-                "llm_freeform_patch_text_used"
-                if materialization_mode == "llm_freeform_unified_diff"
-                else "llm_ranked_semantic_strategy_but_template_helper_materialized_text"
+                "typed_blind_llm_patch_text_used"
+                if materialization_mode in {"blind_llm_unified_diff", "blind_llm_typed_repair_diff", "blind_llm_open_ended_repair_diff"}
+                else "blind_llm_patch_generation_failed"
             ),
         },
     )
@@ -2145,6 +2461,11 @@ def write_patch_creation(
             "patch_freeform_materialization_manifest_path": str(patch_freeform_materialization_manifest_path(task_id)),
             "patch_llm_vs_template_comparison_path": str(patch_llm_vs_template_comparison_path(task_id)),
             "patch_ground_truth_mode": patch_ground_truth_mode,
+            "patch_synthesis_type": patch_synthesis_type,
+            "patch_synthesis_reason": patch_synthesis_reason,
+            "prompt_template_id": prompt_template_id,
+            "known_fix_path_reached": known_fix_path_reached,
+            "deterministic_template_applied": deterministic_template_applied,
             "selection_source": llm_selection_source,
             "llm_selection_confidence": llm_selection_confidence,
             "llm_selection_fallback_triggered": llm_selection_fallback_triggered,
@@ -2171,7 +2492,11 @@ def write_patch_creation(
     patch_generation_provenance = (
         "real_llm_patch"
         if llm_metadata.llm_real_call_verified
-        and materialization_mode in {"llm_freeform_unified_diff", "generic_llm_open_ended_diff"}
+        and materialization_mode in {
+            "blind_llm_unified_diff",
+            "blind_llm_typed_repair_diff",
+            "blind_llm_open_ended_repair_diff",
+        }
         else _patch_provenance_from_strategy(strategy)
     )
     payload = {
@@ -2197,6 +2522,11 @@ def write_patch_creation(
         "patch_freeform_materialization_manifest_path": str(patch_freeform_materialization_manifest_path(task_id)),
         "patch_llm_vs_template_comparison_path": str(patch_llm_vs_template_comparison_path(task_id)),
         "patch_ground_truth_mode": patch_ground_truth_mode,
+        "patch_synthesis_type": patch_synthesis_type,
+        "patch_synthesis_reason": patch_synthesis_reason,
+        "prompt_template_id": prompt_template_id,
+        "known_fix_path_reached": known_fix_path_reached,
+        "deterministic_template_applied": deterministic_template_applied,
         "selection_source": llm_selection_source,
         "llm_selection_confidence": llm_selection_confidence,
         "llm_selection_fallback_triggered": llm_selection_fallback_triggered,
