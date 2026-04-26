@@ -81,6 +81,7 @@ WEAK_SANITIZER_SIGNAL_TOKENS = (
     "warning: memorysanitizer",
     "memorysanitizer",
 )
+TRACE_MAX_DURATION_SECONDS = 600
 
 
 def _load_json(path: Path) -> dict:
@@ -461,10 +462,15 @@ def _replay_build_variant(task_dir: Path, harness_name: str, binary_path: str) -
 
 def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) -> None:
     logger.info("tracer received task %s", task_id)
+    trace_started_at = task_store.now()
+    trace_started_monotonic = time.monotonic()
     task_store.update_status(
         task_id,
         TaskStatus.TRACING,
-        runtime_patch={"trace_started_at": task_store.now()},
+        runtime_patch={
+            "trace_started_at": trace_started_at,
+            "trace_timeout_seconds": TRACE_MAX_DURATION_SECONDS,
+        },
     )
     task = task_store.load_task(task_id)
     task_dir = Path(task.task_dir)
@@ -495,6 +501,26 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
     candidate_rejected_count = 0
     candidate_repro_eligible_count = 0
     trace_inputs: list[dict] = []
+    processed_trace_inputs = 0
+    trace_partial_completion = False
+    trace_timed_out_at = None
+
+    def _trace_budget_exhausted() -> bool:
+        nonlocal trace_partial_completion, trace_timed_out_at
+        if trace_partial_completion:
+            return True
+        elapsed_seconds = time.monotonic() - trace_started_monotonic
+        if elapsed_seconds < TRACE_MAX_DURATION_SECONDS:
+            return False
+        trace_partial_completion = True
+        trace_timed_out_at = task_store.now()
+        logger.warning(
+            "task %s tracing budget exhausted after %.2fs; writing partial trace manifest",
+            task_id,
+            elapsed_seconds,
+        )
+        return True
+
     if crashes_raw_dir.exists():
         for testcase in sorted(path for path in crashes_raw_dir.iterdir() if path.is_file()):
             crash_source = classify_crash_source(testcase)
@@ -554,12 +580,16 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
     )
 
     for trace_input in trace_inputs:
+        if _trace_budget_exhausted():
+            break
         testcase = Path(trace_input["testcase_path"])
         crash_source = str(trace_input.get("crash_source") or "live_raw")
         candidate_origin_kind = str(trace_input.get("candidate_origin_kind") or "raw_crash")
         best = None
         best_signal = None
         for harness_name, binary_path in candidate_targets(task_dir):
+            if _trace_budget_exhausted():
+                break
             replay_variant = _replay_build_variant(task_dir, harness_name, binary_path) if not binary_mode else {
                 "replay_build_variant": "binary_execution_replay",
                 "replay_binary_path": binary_path,
@@ -665,6 +695,8 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
                     **replay_variant,
                 },
             )
+            if _trace_budget_exhausted():
+                break
             if binary_mode and parsed.environment_classification is not None:
                 continue
             if parsed.sanitizer == "address":
@@ -672,6 +704,8 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
             if candidate_origin_kind == "suspicious_candidate" and signal["actionable"]:
                 break
 
+        if best is None and trace_partial_completion:
+            break
         if best is None and candidate_origin_kind == "suspicious_candidate":
             rejection_reason = "no_replay_targets_available_for_candidate"
             candidate_result_payload = {
@@ -860,6 +894,9 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
             candidate_result_paths.append(result_path)
             if repro_admission_eligibility == "eligible" and trace_artifact_path:
                 candidate_repro_eligible_count += 1
+        processed_trace_inputs += 1
+        if trace_partial_completion:
+            break
 
     family_manifest = (
         build_trace_family_manifest(task_id, traced_artifacts)
@@ -883,9 +920,13 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
         or artifact.get("payload", {}).get("crash_source") == "live_raw"
     )
     repro_candidate_count = max(repro_candidate_count, candidate_repro_eligible_count)
+    trace_completed_at = trace_timed_out_at or task_store.now()
+    trace_elapsed_seconds = round(time.monotonic() - trace_started_monotonic, 6)
     status = TaskStatus.TRACED.value if traced_paths else TaskStatus.TRACE_FAILED.value
     if traced_paths:
         why_not_promoted = None
+    elif trace_partial_completion:
+        why_not_promoted = "trace_budget_exhausted"
     elif trace_input_origin == "generalized_candidate_queue":
         why_not_promoted = "no_actionable_suspicious_candidates_after_replay"
     elif not trace_inputs:
@@ -912,6 +953,7 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
         "crash_source": crash_source_used,
         "trace_admission_kind": trace_input_origin,
         "trace_input_count": len(trace_inputs),
+        "trace_inputs_processed_count": processed_trace_inputs,
         "suspicious_trace_candidate_count": suspicious_trace_input_count,
         "suspicious_candidate_queue_path": suspicious_queue_file if suspicious_trace_input_count else None,
         "crash_family": sanitizer or trace_mode,
@@ -930,16 +972,29 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
             replay_summaries[0].get("replay_binary_path") if replay_summaries else None
         ),
         "replay_launcher": replay_summaries[0].get("replay_launcher") if replay_summaries else None,
+        "replay_attempt_count": len(replay_summaries),
         "trace_success_reason": (
+            "partial_trace_budget_exhausted_with_actionable_results"
+            if trace_partial_completion and traced_paths
+            else
             "actionable suspicious candidate replay produced"
             if traced_paths and trace_input_origin == "generalized_candidate_queue"
             else "actionable sanitizer/replay signature produced"
             if traced_paths
+            else "trace_budget_exhausted_partial_manifest_emitted"
+            if trace_partial_completion
             else "generalized candidate trace results persisted without actionable crash"
             if candidate_result_paths and trace_input_origin == "generalized_candidate_queue"
             else None
         ),
         "trace_failure_reason": why_not_promoted,
+        "partial_completion": trace_partial_completion,
+        "trace_budget_exhausted": trace_partial_completion,
+        "trace_timeout_seconds": TRACE_MAX_DURATION_SECONDS,
+        "trace_started_at": trace_started_at,
+        "trace_completed_at": trace_completed_at,
+        "trace_timed_out_at": trace_timed_out_at,
+        "trace_elapsed_seconds": trace_elapsed_seconds,
         "can_feed_reproducer": bool(repro_candidate_count),
         "repro_admission_candidate_count": repro_candidate_count,
         "target_mode": provenance.get("target_mode"),
@@ -975,15 +1030,16 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
             task_id,
             TaskStatus.TRACE_FAILED,
             runtime_patch={
-                "trace_completed_at": task_store.now(),
+                "trace_completed_at": trace_completed_at,
                 "trace_manifest_path": str(manifest_path),
                 "trace_dedup_index_path": str(dedup_path),
                 "trace_family_manifest_path": str(trace_family_manifest_path(task_id)),
                 "traced_crash_count": 0,
-                "trace_gate_decision": "blocked",
+                "trace_gate_decision": "partial_completed" if trace_partial_completion else "blocked",
                 "trace_gate_reason": why_not_promoted,
                 "trace_admission_kind": trace_input_origin,
                 "trace_input_count": len(trace_inputs),
+                "trace_inputs_processed_count": processed_trace_inputs,
                 "suspicious_trace_candidate_count": suspicious_trace_input_count,
                 "suspicious_candidate_queue_path": suspicious_queue_file if suspicious_trace_input_count else None,
                 "generalized_candidate_claim_count": candidate_claim_count,
@@ -993,6 +1049,13 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
                 "generalized_candidate_trace_results_dir": str(candidate_results_dir) if suspicious_trace_input_count else None,
                 "repro_admission_candidate_count": repro_candidate_count,
                 "why_not_promoted": why_not_promoted,
+                "trace_partial_completion": trace_partial_completion,
+                "trace_partial_manifest_path": str(manifest_path) if trace_partial_completion else None,
+                "trace_budget_exhausted": trace_partial_completion,
+                "trace_timeout_seconds": TRACE_MAX_DURATION_SECONDS,
+                "trace_timed_out_at": trace_timed_out_at,
+                "trace_elapsed_seconds": trace_elapsed_seconds,
+                "trace_replay_attempt_count": len(replay_summaries),
             },
         )
         maybe_enqueue_repro(task_id, task_store, queue)
@@ -1004,7 +1067,7 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
         task_id,
         TaskStatus.TRACED,
         runtime_patch={
-            "trace_completed_at": task_store.now(),
+            "trace_completed_at": trace_completed_at,
             "trace_manifest_path": str(manifest_path),
             "trace_dedup_index_path": str(dedup_path),
             "trace_family_manifest_path": str(trace_family_manifest_path(task_id)),
@@ -1016,6 +1079,7 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
             "active_harness_path": active_harness["path"],
             "trace_admission_kind": trace_input_origin,
             "trace_input_count": len(trace_inputs),
+            "trace_inputs_processed_count": processed_trace_inputs,
             "suspicious_trace_candidate_count": suspicious_trace_input_count,
             "suspicious_candidate_queue_path": suspicious_queue_file if suspicious_trace_input_count else None,
             "generalized_candidate_claim_count": candidate_claim_count,
@@ -1034,8 +1098,19 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
             "corpus_provenance": provenance.get("corpus_provenance"),
             "trace_mode": trace_mode,
             "selected_binary_slice_focus": provenance.get("selected_binary_slice_focus"),
-            "trace_gate_decision": "completed",
-            "trace_gate_reason": "actionable_traced_candidates_available",
+            "trace_gate_decision": "partial_completed" if trace_partial_completion else "completed",
+            "trace_gate_reason": (
+                "trace_budget_exhausted_partial_manifest_emitted"
+                if trace_partial_completion
+                else "actionable_traced_candidates_available"
+            ),
+            "trace_partial_completion": trace_partial_completion,
+            "trace_partial_manifest_path": str(manifest_path) if trace_partial_completion else None,
+            "trace_budget_exhausted": trace_partial_completion,
+            "trace_timeout_seconds": TRACE_MAX_DURATION_SECONDS,
+            "trace_timed_out_at": trace_timed_out_at,
+            "trace_elapsed_seconds": trace_elapsed_seconds,
+            "trace_replay_attempt_count": len(replay_summaries),
             "closure_mode": (
                 "strict_live"
                 if crash_source_used == "live_raw" and trace_mode == "live_asan"

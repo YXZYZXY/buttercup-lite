@@ -227,6 +227,7 @@ class SlotController:
         self.binary_min_continuation_seconds = int(config.get("binary_min_continuation_seconds") or 600)
         self.warmup_seconds = int(config.get("warmup_seconds") or 45)
         self.async_teardown_timeout_seconds = int(config.get("async_teardown_timeout_seconds") or 30)
+        self.campaign_overrun_grace_seconds = int(config.get("campaign_overrun_grace_seconds") or 30)
         self.started_at = _now()
         self.deadline_at = self.started_at.timestamp() + self.slot_duration_seconds
         self.fabric_namespace = str(
@@ -329,6 +330,79 @@ class SlotController:
 
     def _deadline_iso(self) -> str:
         return datetime.fromtimestamp(self.deadline_at, timezone.utc).isoformat()
+
+    def _campaign_elapsed_seconds(self, campaign: RunningCampaign) -> float:
+        started_at = _parse_iso(campaign.started_at)
+        if started_at is None:
+            return 0.0
+        return max(0.0, (_now() - started_at).total_seconds())
+
+    def _force_progress_over_budget_campaign(self, label: str, campaign: RunningCampaign) -> bool:
+        if campaign.process.poll() is not None:
+            return False
+        allowed_seconds = max(
+            int(campaign.child_duration_seconds or 0) + int(self.campaign_overrun_grace_seconds or 0),
+            0,
+        )
+        elapsed_seconds = self._campaign_elapsed_seconds(campaign)
+        if allowed_seconds <= 0 or elapsed_seconds < allowed_seconds:
+            return False
+        snapshot = _task_snapshot(campaign.task_id)
+        forced_at = _iso()
+        forced_reason = (
+            f"slot_controller_child_budget_exhausted:"
+            f"{int(elapsed_seconds)}s>{int(campaign.child_duration_seconds)}s+{int(self.campaign_overrun_grace_seconds)}s"
+        )
+        self.task_store.update_runtime(
+            campaign.task_id,
+            {
+                "slot_controller_forced_progression_at": forced_at,
+                "slot_controller_forced_progression_reason": forced_reason,
+                "slot_controller_forced_progression_snapshot_status": snapshot.get("status"),
+                "slot_controller_forced_progression_snapshot_lifecycle_state": snapshot.get(
+                    "campaign_lifecycle_state"
+                ),
+                "campaign_resolution_owner": "slot_controller_forced_progression",
+            },
+        )
+        self._update_manifest(
+            campaign.launch_manifest_path,
+            {
+                "slot_controller_forced_progression_at": forced_at,
+                "slot_controller_forced_progression_reason": forced_reason,
+                "slot_controller_forced_progression_elapsed_seconds": round(elapsed_seconds, 3),
+                "slot_controller_forced_progression_child_duration_seconds": campaign.child_duration_seconds,
+            },
+        )
+        logger.warning(
+            "slot %s forcing progression for campaign %s after %.2fs (budget=%ss, grace=%ss, status=%s, lifecycle=%s)",
+            label,
+            campaign.task_id,
+            elapsed_seconds,
+            campaign.child_duration_seconds,
+            self.campaign_overrun_grace_seconds,
+            snapshot.get("status"),
+            snapshot.get("campaign_lifecycle_state"),
+        )
+        try:
+            os.killpg(campaign.process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        deadline = time.time() + min(20, max(5, int(self.campaign_overrun_grace_seconds or 0)))
+        while campaign.process.poll() is None and time.time() < deadline:
+            if self._try_manifest_safe_handoff(label, campaign):
+                return True
+            time.sleep(1)
+        if campaign.process.poll() is None:
+            try:
+                os.killpg(campaign.process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        if campaign.process.poll() is None:
+            return False
+        if label in self.running:
+            self._handle_exit(label, campaign)
+        return True
 
     def _claim_filters(self, spec: SlotSpec) -> dict[str, Any]:
         return {
@@ -1410,6 +1484,8 @@ class SlotController:
                     self._prepare_warmup_launch(campaign.spec, campaign)
                 for label, campaign in list(self.running.items()):
                     if self._try_manifest_safe_handoff(label, campaign):
+                        continue
+                    if self._force_progress_over_budget_campaign(label, campaign):
                         continue
                     if campaign.process.poll() is not None:
                         self._handle_exit(label, campaign)

@@ -25,6 +25,8 @@ from core.campaign.system_fabric import (
     register_campaign,
     stage_system_corpus,
     system_candidate_queue_path,
+    system_compatible_shared_corpus_index_path,
+    system_compatible_shared_corpus_path,
     system_coverage_queue_path,
     system_family_inventory_path,
     system_fabric_root,
@@ -368,6 +370,125 @@ def _existing_file_paths(raw_paths: list[str] | None) -> list[str]:
     return selected
 
 
+def _runtime_compatible_corpus_group(*, lane: str, target_mode: str) -> str | None:
+    normalized_lane = str(lane or "").strip().lower()
+    normalized_target_mode = str(target_mode or "").strip().lower()
+    if normalized_target_mode == "source" and normalized_lane in {"source", "generalized"}:
+        return "source_generalized"
+    return None
+
+
+def _empty_corpus_stage_summary(
+    *,
+    decision_log_path: Path | None = None,
+    index_path: Path | None = None,
+    skip_reason: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "new_files": 0,
+        "new_bytes": 0,
+        "merge_count": 0,
+        "reject_count": 0,
+        "selected_count": 0,
+        "selected_imported_count": 0,
+        "cross_lane_selected_count": 0,
+        "cross_project_selected_count": 0,
+        "cross_harness_selected_count": 0,
+        "quality_gate_passed_count": 0,
+        "quality_gate_rejected_count": 0,
+        "quality_gate_pass_rate": 0.0,
+        "selected_files": [],
+        "rejected_files": [],
+        "selected_origin_lane_counts": {},
+        "selected_import_reason_counts": {},
+        "decision_log_path": str(decision_log_path) if decision_log_path else None,
+        "index_path": str(index_path) if index_path else None,
+        "skip_reason": skip_reason,
+    }
+
+
+def _stage_generalized_reverse_corpus(
+    *,
+    project: str,
+    lane: str,
+    target_mode: str,
+    selected_harness: str | None,
+    round_task_id: str,
+    campaign_task_id: str,
+    round_corpus_root: Path,
+    manifest_path: Path,
+) -> dict[str, Any]:
+    decision_log_path = manifest_path.with_name("generalized_reverse_corpus_stage_manifest.json")
+    index_path = manifest_path.with_name("generalized_reverse_corpus_stage_index.json")
+    compatibility_group = _runtime_compatible_corpus_group(lane=lane, target_mode=target_mode)
+    if lane != "source" or target_mode != "source" or not compatibility_group:
+        return _empty_corpus_stage_summary(
+            decision_log_path=decision_log_path,
+            index_path=index_path,
+            skip_reason="reverse_generalized_import_not_applicable",
+        )
+    compatible_root = system_compatible_shared_corpus_path(
+        compatibility_group=compatibility_group,
+        target_mode=target_mode,
+    )
+    compatible_index_path = system_compatible_shared_corpus_index_path(
+        compatibility_group=compatibility_group,
+        target_mode=target_mode,
+    )
+    compatible_index = _read_json(compatible_index_path, {})
+    allowed_paths: list[str] = []
+    seen_paths: set[str] = set()
+    for row in list(compatible_index.get("files") or compatible_index.get("selected_files") or []):
+        if not isinstance(row, dict):
+            continue
+        origin_lane = str(row.get("origin_lane") or row.get("lane") or "").strip().lower()
+        if origin_lane != "generalized":
+            continue
+        candidate_path = Path(str(row.get("destination_path") or row.get("path") or ""))
+        if not candidate_path.exists() or not candidate_path.is_file():
+            continue
+        resolved_path = str(candidate_path.resolve())
+        if resolved_path in seen_paths:
+            continue
+        seen_paths.add(resolved_path)
+        allowed_paths.append(resolved_path)
+    if not allowed_paths:
+        return _empty_corpus_stage_summary(
+            decision_log_path=decision_log_path,
+            index_path=index_path,
+            skip_reason="no_generalized_entries_in_compatible_pool",
+        )
+    return merge_into_slot_local_corpus(
+        round_corpus_root,
+        [
+            {
+                "root": str(compatible_root),
+                "allowed_paths": allowed_paths,
+                "label": "system_compatible_generalized_reverse",
+                "scope": "system_compatible_shared",
+                "project": None,
+                "lane": None,
+                "target_mode": target_mode,
+                "priority_weight": 4.7,
+                "index_path": str(compatible_index_path),
+                "import_reason": "generalized_compatible_shared_pool",
+                "selection_reason": "stage_generalized_reverse_pool_into_source_round_active",
+                "cross_lane_priority_bonus": 75.0,
+                "cross_project_priority_bonus": 25.0,
+            }
+        ],
+        destination_project=project,
+        destination_lane=lane,
+        destination_target_mode=target_mode,
+        destination_harness=selected_harness,
+        decision_log_path=decision_log_path,
+        index_path=index_path,
+        consumer_task_id=round_task_id,
+        consumer_campaign_task_id=campaign_task_id,
+        **corpus_policy("round_local"),
+    )
+
+
 def _build_compatible_corpus_export_layers(
     *,
     campaign_task_id: str,
@@ -484,6 +605,7 @@ def _corpus_stage_state_for_round(round_task_id: str) -> dict[str, Any]:
     payload = _read_json(campaign_corpus_stage_manifest_path(round_task_id), {})
     stages = [
         dict(payload.get("system_stage") or {}),
+        dict(payload.get("compatible_reverse_stage") or {}),
         dict(payload.get("campaign_shared_stage") or {}),
         dict(payload.get("campaign_harness_stage") or {}),
     ]
@@ -498,6 +620,7 @@ def _corpus_stage_state_for_round(round_task_id: str) -> dict[str, Any]:
     rejection_reason_counts: dict[str, int] = {}
     for stage_name, stage in (
         ("system_stage", dict(payload.get("system_stage") or {})),
+        ("compatible_reverse_stage", dict(payload.get("compatible_reverse_stage") or {})),
         ("campaign_shared_stage", dict(payload.get("campaign_shared_stage") or {})),
         ("campaign_harness_stage", dict(payload.get("campaign_harness_stage") or {})),
     ):
@@ -2595,6 +2718,21 @@ def prepare_session_round_task(
         round_corpus_root=round_corpus_root,
         manifest_path=stage_manifest_path.with_name("system_corpus_stage_manifest.json"),
     )
+    generalized_from_system = int((staged_from_system.get("selected_origin_lane_counts") or {}).get("generalized") or 0)
+    staged_from_compatible_reverse = (
+        _stage_generalized_reverse_corpus(
+            project=project,
+            lane=lane,
+            target_mode=target_mode,
+            selected_harness=selected_harness,
+            round_task_id=round_task_id,
+            campaign_task_id=campaign_task_id,
+            round_corpus_root=round_corpus_root,
+            manifest_path=stage_manifest_path,
+        )
+        if lane == "source" and target_mode == "source" and generalized_from_system == 0
+        else _empty_corpus_stage_summary(skip_reason="system_stage_already_imported_generalized_inputs")
+    )
     staged_from_shared = merge_into_slot_local_corpus(
         round_corpus_root,
         [
@@ -2654,15 +2792,17 @@ def prepare_session_round_task(
         if harness_corpus_root
         else {"new_files": 0, "new_bytes": 0, "cross_harness_selected_count": 0, "selected_files": [], "rejected_files": []}
     )
-    stage_summaries = [staged_from_system, staged_from_shared, staged_from_harness]
+    stage_summaries = [staged_from_system, staged_from_compatible_reverse, staged_from_shared, staged_from_harness]
     shared_to_session_import_count = sum(int(stage.get("selected_imported_count") or 0) for stage in stage_summaries)
     shared_to_session_reject_count = sum(int(stage.get("quality_gate_rejected_count") or 0) for stage in stage_summaries)
     shared_to_session_imported_items: list[dict[str, Any]] = []
     shared_to_session_imported_item_ids: list[str] = []
     shared_to_session_rejected_item_ids: list[str] = []
     shared_to_session_cross_lane_import_count = 0
+    generalized_to_source_import_count = 0
     for stage_name, stage in (
         ("system_stage", staged_from_system),
+        ("compatible_reverse_stage", staged_from_compatible_reverse),
         ("campaign_shared_stage", staged_from_shared),
         ("campaign_harness_stage", staged_from_harness),
     ):
@@ -2674,6 +2814,8 @@ def prepare_session_round_task(
             cross_lane_transfer = bool(item.get("cross_lane_transfer"))
             if cross_lane_transfer:
                 shared_to_session_cross_lane_import_count += 1
+            if str(item.get("origin_lane") or "").strip() == "generalized" and str(item.get("consumer_lane") or "").strip() == "source":
+                generalized_to_source_import_count += 1
             shared_to_session_imported_items.append(
                 {
                     "stage": stage_name,
@@ -2708,13 +2850,16 @@ def prepare_session_round_task(
                 "campaign_local_shared": str(campaign_shared_root),
                 "campaign_local_harness": str(harness_corpus_root) if harness_corpus_root else None,
                 "system_shared_stage_manifest_path": staged_from_system.get("decision_log_path"),
+                "compatible_reverse_stage_manifest_path": staged_from_compatible_reverse.get("decision_log_path"),
             },
             "system_stage": staged_from_system,
+            "compatible_reverse_stage": staged_from_compatible_reverse,
             "campaign_shared_stage": staged_from_shared,
             "campaign_harness_stage": staged_from_harness,
             "shared_to_session_import_count": shared_to_session_import_count,
             "shared_to_session_reject_count": shared_to_session_reject_count,
             "shared_to_session_cross_lane_import_count": shared_to_session_cross_lane_import_count,
+            "generalized_to_source_import_count": generalized_to_source_import_count,
             "shared_to_session_imported_item_ids": shared_to_session_imported_item_ids[:512],
             "shared_to_session_rejected_item_ids": shared_to_session_rejected_item_ids[:512],
             "shared_to_session_imported_items": shared_to_session_imported_items[:128],
@@ -2817,6 +2962,13 @@ def prepare_session_round_task(
         "campaign_stage_system_corpus_cross_lane_transfer_count": int(
             staged_from_system.get("cross_lane_selected_count") or 0
         ),
+        "campaign_stage_compatible_reverse_corpus_new_files": int(staged_from_compatible_reverse.get("new_files") or 0),
+        "campaign_stage_compatible_reverse_selected_imported_count": int(
+            staged_from_compatible_reverse.get("selected_imported_count") or 0
+        ),
+        "campaign_stage_compatible_reverse_cross_lane_transfer_count": int(
+            staged_from_compatible_reverse.get("cross_lane_selected_count") or 0
+        ),
         "campaign_stage_system_corpus_cross_project_transfer_count": int(
             staged_from_system.get("cross_project_selected_count") or 0
         ),
@@ -2825,13 +2977,16 @@ def prepare_session_round_task(
         "campaign_shared_to_session_import_count": shared_to_session_import_count,
         "campaign_shared_to_session_reject_count": shared_to_session_reject_count,
         "campaign_shared_to_session_cross_lane_import_count": shared_to_session_cross_lane_import_count,
+        "campaign_generalized_to_source_import_count": generalized_to_source_import_count,
         "campaign_shared_to_session_imported_item_ids": shared_to_session_imported_item_ids[:128],
         "campaign_stage_cross_harness_selected_count": int(
             staged_from_system.get("cross_harness_selected_count") or 0
         )
+        + int(staged_from_compatible_reverse.get("cross_harness_selected_count") or 0)
         + int(staged_from_shared.get("cross_harness_selected_count") or 0)
         + int(staged_from_harness.get("cross_harness_selected_count") or 0),
         "campaign_system_corpus_stage_manifest_path": staged_from_system.get("decision_log_path"),
+        "campaign_compatible_reverse_corpus_stage_manifest_path": staged_from_compatible_reverse.get("decision_log_path"),
         "campaign_shared_corpus_stage_manifest_path": staged_from_shared.get("decision_log_path"),
         "campaign_harness_corpus_stage_manifest_path": staged_from_harness.get("decision_log_path"),
         "campaign_shared_corpus_path": str(campaign_shared_root),
