@@ -13,6 +13,8 @@ from core.analysis.loose_cluster import (
 )
 from core.storage.layout import repro_family_manifest_path, trace_family_manifest_path
 
+DEFAULT_RECONFIRMATION_ROUND_GAP = 5
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -64,6 +66,17 @@ def _sorted_strings(values: set[str] | list[str] | tuple[str, ...]) -> list[str]
     return sorted(str(item).strip() for item in values if str(item).strip())
 
 
+def _reconfirmation_round_threshold(campaign_state: dict[str, Any]) -> int:
+    family_inventory = dict(campaign_state.get("family_inventory") or {})
+    threshold = int(
+        family_inventory.get("reconfirmation_threshold_rounds")
+        or campaign_state.get("family_reconfirmation_round_threshold")
+        or DEFAULT_RECONFIRMATION_ROUND_GAP
+        or 1
+    )
+    return max(1, threshold)
+
+
 def _family_lineage(
     *,
     exact_signature: str | None,
@@ -79,11 +92,16 @@ def _family_lineage(
     blocker_reason: str | None = None,
     observed_signatures: list[str] | None = None,
     observed_cluster_match_reasons: list[str] | None = None,
+    reconfirmation_trigger: str | None = None,
+    reconfirmation_round_gap: int | None = None,
+    reconfirmation_threshold_rounds: int | None = None,
 ) -> dict[str, Any]:
+    generated_at = _now_iso()
     return {
         "from_trace_exact_signature": str(exact_signature or "").strip() or None,
         "from_loose_cluster_key": str(loose_cluster_key or "").strip() or None,
         "to_confirmed_family_key": str(confirmed_family_key or "").strip() or None,
+        "generated_at": generated_at,
         "promotion_state": promotion_state,
         "already_confirmed_family": bool(already_confirmed_family),
         "requires_reconfirmation": bool(requires_reconfirmation),
@@ -94,6 +112,41 @@ def _family_lineage(
         "blocker_reason": str(blocker_reason or "").strip() or None,
         "observed_signatures": list(observed_signatures or []),
         "observed_cluster_match_reasons": list(observed_cluster_match_reasons or []),
+        "reconfirmation_trigger": str(reconfirmation_trigger or "").strip() or None,
+        "reconfirmation_round_gap": int(reconfirmation_round_gap or 0),
+        "reconfirmation_threshold_rounds": (
+            int(reconfirmation_threshold_rounds)
+            if reconfirmation_threshold_rounds is not None
+            else None
+        ),
+        "transitions": {
+            "trace_exact": {
+                "exact_signature": str(exact_signature or "").strip() or None,
+                "recorded_at": generated_at,
+            },
+            "loose_cluster": {
+                "loose_cluster_key": str(loose_cluster_key or "").strip() or None,
+                "recorded_at": generated_at,
+                "cluster_match_reasons": list(observed_cluster_match_reasons or []),
+            },
+            "confirmed_family": {
+                "confirmed_family_key": str(confirmed_family_key or "").strip() or None,
+                "recorded_at": generated_at,
+                "promotion_state": promotion_state,
+                "confirmation_level": str(confirmation_level or "").strip() or None,
+                "promotion_rule": str(promotion_rule or "").strip() or None,
+                "blocker_kind": str(blocker_kind or "").strip() or None,
+                "blocker_reason": str(blocker_reason or "").strip() or None,
+                "requires_reconfirmation": bool(requires_reconfirmation),
+                "reconfirmation_trigger": str(reconfirmation_trigger or "").strip() or None,
+                "reconfirmation_round_gap": int(reconfirmation_round_gap or 0),
+                "reconfirmation_threshold_rounds": (
+                    int(reconfirmation_threshold_rounds)
+                    if reconfirmation_threshold_rounds is not None
+                    else None
+                ),
+            },
+        },
     }
 
 
@@ -228,12 +281,15 @@ def plan_reproduction_candidates(
     campaign_state: dict[str, Any],
 ) -> dict[str, Any]:
     family_inventory = dict(campaign_state.get("family_inventory") or {})
+    current_session_index = int(campaign_state.get("session_count") or 0) + 1
+    reconfirmation_threshold_rounds = _reconfirmation_round_threshold(campaign_state)
     confirmed_family_keys = {
         str(item).strip()
         for item in (family_inventory.get("confirmed_families") or [])
         if str(item).strip()
     }
     confirmed_signature_index = _confirmed_signature_index(family_inventory)
+    confirmed_family_details = dict(family_inventory.get("confirmed_family_details") or {})
     unresolved_backlog = {
         str(item.get("loose_cluster_key") or "").strip()
         for item in (family_inventory.get("unresolved_loose_clusters") or [])
@@ -255,11 +311,36 @@ def plan_reproduction_candidates(
         candidate_exact_signature = str(payload.get("family_exact_signature") or payload.get("signature") or "").strip()
         already_confirmed_family = confirmed_family_key in confirmed_family_keys
         known_confirmed_signatures = _sorted_strings(confirmed_signature_index.get(confirmed_family_key, set()))
-        requires_reconfirmation = bool(
+        family_detail = dict(confirmed_family_details.get(confirmed_family_key) or {})
+        signature_drift_requires_reconfirmation = bool(
             already_confirmed_family
             and candidate_exact_signature
             and known_confirmed_signatures
             and candidate_exact_signature not in known_confirmed_signatures
+        )
+        last_reconfirmed_session_index = int(
+            family_detail.get("last_reconfirmed_session_index")
+            or family_detail.get("last_confirmed_session_index")
+            or family_detail.get("first_confirmed_session_index")
+            or 0
+        )
+        reconfirmation_round_gap = max(0, current_session_index - last_reconfirmed_session_index)
+        round_age_requires_reconfirmation = bool(
+            already_confirmed_family
+            and last_reconfirmed_session_index > 0
+            and reconfirmation_round_gap >= reconfirmation_threshold_rounds
+        )
+        requires_reconfirmation = bool(
+            signature_drift_requires_reconfirmation or round_age_requires_reconfirmation
+        )
+        reconfirmation_trigger = (
+            "signature_drift+round_age"
+            if signature_drift_requires_reconfirmation and round_age_requires_reconfirmation
+            else (
+                "signature_drift"
+                if signature_drift_requires_reconfirmation
+                else ("round_age" if round_age_requires_reconfirmation else None)
+            )
         )
         selection_score = _selection_score(payload, active_harness_name=active_harness_name)
         candidate_entry = {
@@ -267,6 +348,9 @@ def plan_reproduction_candidates(
             "selection_score": selection_score,
             "already_confirmed_family": already_confirmed_family,
             "requires_reconfirmation": requires_reconfirmation,
+            "reconfirmation_trigger": reconfirmation_trigger,
+            "reconfirmation_round_gap": reconfirmation_round_gap,
+            "reconfirmation_threshold_rounds": reconfirmation_threshold_rounds,
             "known_confirmed_signatures": known_confirmed_signatures,
             "backlog_priority": loose_cluster_key in unresolved_backlog,
             "traced_candidate": payload,
@@ -284,6 +368,9 @@ def plan_reproduction_candidates(
                 "primary_file": (payload.get("family_features") or {}).get("primary_file"),
                 "selection_score": selection_score,
                 "requires_reconfirmation": requires_reconfirmation,
+                "reconfirmation_trigger": reconfirmation_trigger,
+                "reconfirmation_round_gap": reconfirmation_round_gap,
+                "reconfirmation_threshold_rounds": reconfirmation_threshold_rounds,
                 "known_confirmed_signatures": known_confirmed_signatures,
             },
         }
@@ -298,26 +385,46 @@ def plan_reproduction_candidates(
                 "member_candidate_ids": [],
                 "member_exact_signatures": [],
                 "requires_reconfirmation": False,
+                "reconfirmation_trigger": None,
+                "reconfirmation_round_gap": 0,
+                "reconfirmation_threshold_rounds": reconfirmation_threshold_rounds,
                 "known_confirmed_signatures": known_confirmed_signatures,
                 "representative_primary_function": (payload.get("family_features") or {}).get("primary_function"),
                 "representative_primary_file": (payload.get("family_features") or {}).get("primary_file"),
             },
         )
         cluster_summaries[loose_cluster_key]["member_candidate_ids"].append(candidate_entry["candidate_id"])
+        cluster_summaries[loose_cluster_key]["crash_count"] = len(cluster_summaries[loose_cluster_key]["member_candidate_ids"])
         if candidate_exact_signature and candidate_exact_signature not in cluster_summaries[loose_cluster_key]["member_exact_signatures"]:
             cluster_summaries[loose_cluster_key]["member_exact_signatures"].append(candidate_exact_signature)
         if requires_reconfirmation:
             cluster_summaries[loose_cluster_key]["requires_reconfirmation"] = True
+            cluster_summaries[loose_cluster_key]["reconfirmation_trigger"] = reconfirmation_trigger
+            cluster_summaries[loose_cluster_key]["reconfirmation_round_gap"] = max(
+                int(cluster_summaries[loose_cluster_key].get("reconfirmation_round_gap") or 0),
+                reconfirmation_round_gap,
+            )
 
     selected: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
     unresolved_selected = False
-    for loose_cluster_key, entries in grouped.items():
+    ordered_clusters = sorted(
+        grouped.items(),
+        key=lambda item: (
+            0 if bool(cluster_summaries[item[0]].get("requires_reconfirmation")) else 1,
+            0 if bool(cluster_summaries[item[0]].get("backlog_priority")) else 1,
+            -int(cluster_summaries[item[0]].get("crash_count") or len(item[1])),
+            0 if not bool(cluster_summaries[item[0]].get("already_confirmed_family")) else 1,
+            -max(float(entry.get("selection_score") or 0.0) for entry in item[1]),
+            item[0],
+        ),
+    )
+    for cluster_rank, (loose_cluster_key, entries) in enumerate(ordered_clusters, start=1):
         ordered = sorted(
             entries,
             key=lambda item: (
-                0 if item["backlog_priority"] else 1,
                 0 if item["requires_reconfirmation"] else 1,
+                0 if item["backlog_priority"] else 1,
                 0 if not item["already_confirmed_family"] else 1,
                 -float(item["selection_score"]),
                 item["candidate_id"],
@@ -325,9 +432,18 @@ def plan_reproduction_candidates(
         )
         primary = ordered[0]
         cluster_summary = cluster_summaries[loose_cluster_key]
+        cluster_summary["priority_rank"] = cluster_rank
         if primary["requires_reconfirmation"]:
             unresolved_selected = True
-            primary["selection_reason"] = "confirmed_family_signature_drift"
+            primary["selection_reason"] = (
+                "confirmed_family_round_age_reconfirmation"
+                if primary.get("reconfirmation_trigger") == "round_age"
+                else (
+                    "confirmed_family_signature_drift_reconfirmation"
+                    if primary.get("reconfirmation_trigger") == "signature_drift"
+                    else "confirmed_family_reconfirmation"
+                )
+            )
             selected.append(
                 {
                     **primary,
@@ -386,7 +502,13 @@ def plan_reproduction_candidates(
         "campaign_unresolved_loose_clusters": sorted(unresolved_backlog),
         "selected_candidates": selected,
         "skipped_candidates": skipped,
-        "cluster_summaries": list(cluster_summaries.values()),
+        "cluster_summaries": sorted(
+            cluster_summaries.values(),
+            key=lambda item: (
+                int(item.get("priority_rank") or 999999),
+                str(item.get("loose_cluster_key") or ""),
+            ),
+        ),
         "selected_unresolved_cluster_count": len(
             [
                 item
@@ -420,6 +542,13 @@ def classify_reproduction_attempts(
     ).strip() or None
     already_confirmed_family = bool(selection_context.get("already_confirmed_family"))
     requires_reconfirmation = bool(selection_context.get("requires_reconfirmation"))
+    reconfirmation_trigger = str(selection_context.get("reconfirmation_trigger") or "").strip() or None
+    reconfirmation_round_gap = int(selection_context.get("reconfirmation_round_gap") or 0)
+    reconfirmation_threshold_rounds = (
+        int(selection_context.get("reconfirmation_threshold_rounds"))
+        if selection_context.get("reconfirmation_threshold_rounds") is not None
+        else None
+    )
     environment_failures = [
         attempt
         for attempt in attempts
@@ -459,6 +588,9 @@ def classify_reproduction_attempts(
                 blocker_kind="environment_failure",
                 blocker_reason=blocker_reason,
                 observed_signatures=observed_signatures,
+                reconfirmation_trigger=reconfirmation_trigger,
+                reconfirmation_round_gap=reconfirmation_round_gap,
+                reconfirmation_threshold_rounds=reconfirmation_threshold_rounds,
             ),
         }
 
@@ -512,6 +644,9 @@ def classify_reproduction_attempts(
             promotion_rule="exact_signature_stable",
             observed_signatures=observed_signatures,
             observed_cluster_match_reasons=cluster_match_reasons,
+            reconfirmation_trigger=reconfirmation_trigger,
+            reconfirmation_round_gap=reconfirmation_round_gap,
+            reconfirmation_threshold_rounds=reconfirmation_threshold_rounds,
         )
         return {
             "confirmed": True,
@@ -540,6 +675,9 @@ def classify_reproduction_attempts(
             promotion_rule="confirmed_family_reconfirmation_by_loose_cluster",
             observed_signatures=observed_signatures,
             observed_cluster_match_reasons=cluster_match_reasons,
+            reconfirmation_trigger=reconfirmation_trigger,
+            reconfirmation_round_gap=reconfirmation_round_gap,
+            reconfirmation_threshold_rounds=reconfirmation_threshold_rounds,
         )
         return {
             "confirmed": True,
@@ -582,6 +720,9 @@ def classify_reproduction_attempts(
                 blocker_reason=blocker_reason,
                 observed_signatures=observed_signatures,
                 observed_cluster_match_reasons=cluster_match_reasons,
+                reconfirmation_trigger=reconfirmation_trigger,
+                reconfirmation_round_gap=reconfirmation_round_gap,
+                reconfirmation_threshold_rounds=reconfirmation_threshold_rounds,
             ),
         }
 
@@ -615,6 +756,9 @@ def classify_reproduction_attempts(
             blocker_reason=blocker_reason,
             observed_signatures=observed_signatures,
             observed_cluster_match_reasons=cluster_match_reasons,
+            reconfirmation_trigger=reconfirmation_trigger,
+            reconfirmation_round_gap=reconfirmation_round_gap,
+            reconfirmation_threshold_rounds=reconfirmation_threshold_rounds,
         ),
     }
 

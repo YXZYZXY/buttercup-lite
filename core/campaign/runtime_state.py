@@ -62,6 +62,9 @@ if TYPE_CHECKING:
 STACK_OFFSET_PATTERN = re.compile(r"\+0x([0-9a-fA-F]+)")
 ACCESS_KIND_PATTERN = re.compile(r"\b(READ|WRITE)\s+of\s+size\b", re.IGNORECASE)
 COVERAGE_TARGET_STALL_THRESHOLD = 3
+FAMILY_STAGNATION_TRIGGER_THRESHOLD = 2
+FAMILY_CONFIRMED_VULN_DISCOVERY_THRESHOLD = 2
+FAMILY_RECONFIRMATION_THRESHOLD_ROUNDS = 5
 
 
 def _read_json(path: Path, default: Any) -> Any:
@@ -936,6 +939,9 @@ def initialize_campaign_runtime_state(
             "last_new_exact_signatures": [],
             "last_new_loose_clusters": [],
             "last_new_confirmed_families": [],
+            "requires_reconfirmation_families": [],
+            "requires_reconfirmation_count": 0,
+            "reconfirmation_threshold_rounds": FAMILY_RECONFIRMATION_THRESHOLD_ROUNDS,
         },
         "family_diversification": {
             "stagnation_count": inherited_family_stagnation_count,
@@ -1098,11 +1104,32 @@ def _score_harness_candidate(
 
 def _family_confirmation_inputs(state: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, float]]:
     family_inventory = dict(state.get("family_inventory") or {})
-    unresolved = [
+    unresolved_entries = [
         dict(item)
         for item in (family_inventory.get("unresolved_loose_clusters") or [])
         if isinstance(item, dict) and str(item.get("loose_cluster_key") or "").strip()
     ]
+    reconfirmation_entries = [
+        dict(item)
+        for item in (family_inventory.get("requires_reconfirmation_families") or [])
+        if isinstance(item, dict)
+        and (
+            str(item.get("loose_cluster_key") or "").strip()
+            or str(item.get("confirmed_family_key") or "").strip()
+        )
+    ]
+    unresolved_map: dict[str, dict[str, Any]] = {}
+    for item in unresolved_entries + reconfirmation_entries:
+        cluster_key = str(item.get("loose_cluster_key") or item.get("confirmed_family_key") or "").strip()
+        if not cluster_key:
+            continue
+        previous_entry = dict(unresolved_map.get(cluster_key) or {})
+        merged_entry = {**previous_entry, **item}
+        merged_entry["loose_cluster_key"] = cluster_key
+        if bool(previous_entry.get("requires_reconfirmation")) or bool(item.get("requires_reconfirmation")):
+            merged_entry["requires_reconfirmation"] = True
+        unresolved_map[cluster_key] = merged_entry
+    unresolved = list(unresolved_map.values())
     blockers = [
         dict(item)
         for item in (family_inventory.get("promotion_blockers") or [])
@@ -1138,6 +1165,94 @@ def _family_confirmation_inputs(state: dict[str, Any]) -> tuple[list[dict[str, A
                 pressure += 1.0
             harness_pressure[harness_name] = harness_pressure.get(harness_name, 0.0) + pressure
     return unresolved, blockers, harness_pressure
+
+
+def _family_reconfirmation_threshold(state: dict[str, Any]) -> int:
+    family_inventory = dict(state.get("family_inventory") or {})
+    threshold = int(
+        family_inventory.get("reconfirmation_threshold_rounds")
+        or state.get("family_reconfirmation_round_threshold")
+        or FAMILY_RECONFIRMATION_THRESHOLD_ROUNDS
+        or 1
+    )
+    return max(1, threshold)
+
+
+def _refresh_family_reconfirmation_state(
+    family_inventory: dict[str, Any],
+    *,
+    current_session_index: int,
+    threshold_rounds: int,
+) -> dict[str, Any]:
+    normalized_threshold = max(1, int(threshold_rounds or FAMILY_RECONFIRMATION_THRESHOLD_ROUNDS))
+    details: dict[str, dict[str, Any]] = {}
+    for family_key, raw_detail in dict(family_inventory.get("confirmed_family_details") or {}).items():
+        normalized_key = str(family_key or "").strip()
+        if not normalized_key or not isinstance(raw_detail, dict):
+            continue
+        detail = dict(raw_detail)
+        detail["confirmed_family_key"] = normalized_key
+        last_reconfirmed_session_index = int(
+            detail.get("last_reconfirmed_session_index")
+            or detail.get("last_confirmed_session_index")
+            or detail.get("first_confirmed_session_index")
+            or 0
+        )
+        reconfirmation_round_gap = max(0, int(current_session_index or 0) - last_reconfirmed_session_index)
+        explicit_requires_reconfirmation = bool(detail.get("requires_reconfirmation"))
+        requires_reconfirmation = bool(
+            explicit_requires_reconfirmation
+            or (
+                last_reconfirmed_session_index > 0
+                and reconfirmation_round_gap >= normalized_threshold
+            )
+        )
+        detail["reconfirmation_threshold_rounds"] = normalized_threshold
+        detail["reconfirmation_round_gap"] = reconfirmation_round_gap
+        detail["requires_reconfirmation"] = requires_reconfirmation
+        details[normalized_key] = detail
+
+    reconfirmation_entries: list[dict[str, Any]] = []
+    for family_key, detail in details.items():
+        if not bool(detail.get("requires_reconfirmation")):
+            continue
+        reconfirmation_entries.append(
+            {
+                "loose_cluster_key": str(
+                    detail.get("family_loose_cluster_key")
+                    or detail.get("source_loose_cluster_key")
+                    or detail.get("confirmed_family_key")
+                    or family_key
+                ).strip()
+                or family_key,
+                "confirmed_family_key": family_key,
+                "harness_name": detail.get("harness_name"),
+                "primary_function": detail.get("primary_function") or detail.get("family_primary_function"),
+                "primary_file": detail.get("primary_file") or detail.get("family_primary_file"),
+                "requires_reconfirmation": True,
+                "blocker_kind": "requires_reconfirmation",
+                "blocker_reason": (
+                    "confirmed family has aged beyond the reconfirmation threshold "
+                    f"({int(detail.get('reconfirmation_round_gap') or 0)} rounds without reconfirmation)"
+                ),
+                "reconfirmation_round_gap": int(detail.get("reconfirmation_round_gap") or 0),
+                "reconfirmation_threshold_rounds": normalized_threshold,
+                "last_reconfirmed_session_index": detail.get("last_reconfirmed_session_index"),
+                "family_lineage": detail.get("family_lineage") or detail.get("lineage") or {},
+            }
+        )
+    updated_inventory = dict(family_inventory)
+    updated_inventory["confirmed_family_details"] = details
+    updated_inventory["reconfirmation_threshold_rounds"] = normalized_threshold
+    updated_inventory["requires_reconfirmation_families"] = sorted(
+        reconfirmation_entries,
+        key=lambda item: (
+            -int(item.get("reconfirmation_round_gap") or 0),
+            str(item.get("confirmed_family_key") or ""),
+        ),
+    )
+    updated_inventory["requires_reconfirmation_count"] = len(reconfirmation_entries)
+    return updated_inventory
 
 
 def _family_focus_target_name(item: dict[str, Any]) -> str:
@@ -1376,12 +1491,24 @@ def choose_next_session_plan(
     harness_pool = list(state.get("active_harness_pool") or [])
     coverage_state = state.get("coverage_state") or {}
     family_diversification = state.get("family_diversification") or {}
+    family_inventory = _refresh_family_reconfirmation_state(
+        dict(state.get("family_inventory") or {}),
+        current_session_index=session_index,
+        threshold_rounds=_family_reconfirmation_threshold(state),
+    )
+    state["family_inventory"] = family_inventory
     lane = str(state.get("lane") or "source")
     coverage_stalled = bool(coverage_state.get("coverage_stalled"))
     family_stagnation_count = int(family_diversification.get("stagnation_count") or 0)
-    family_stalled = family_stagnation_count >= 2
+    family_stalled = family_stagnation_count >= FAMILY_STAGNATION_TRIGGER_THRESHOLD
     unresolved_loose_clusters, promotion_blockers, family_harness_pressure = _family_confirmation_inputs(state)
     family_confirmation_pressure = bool(unresolved_loose_clusters or promotion_blockers)
+    confirmed_family_count = len(family_inventory.get("confirmed_families") or [])
+    requires_reconfirmation_count = int(family_inventory.get("requires_reconfirmation_count") or 0)
+    family_reconfirmation_threshold = int(
+        family_inventory.get("reconfirmation_threshold_rounds")
+        or FAMILY_RECONFIRMATION_THRESHOLD_ROUNDS
+    )
     target_mode = str(state.get("target_mode") or "source")
     active_session_task_id = str(state.get("active_session_task_id") or "").strip() or None
     reuse_existing_round_task = target_mode != "binary" and bool(active_session_task_id)
@@ -1621,6 +1748,8 @@ def choose_next_session_plan(
         coverage_claim,
         coverage_stalled=coverage_stalled,
     )
+    seed_mode_trigger_source: str | None = None
+    seed_mode_trigger_reason: str | None = None
 
     if session_index == 1:
         triggered_action_type = "bootstrap"
@@ -1640,9 +1769,31 @@ def choose_next_session_plan(
     elif family_confirmation_pressure:
         triggered_action_type = "family_confirmation_followup"
         seed_mode_override = "SEED_EXPLORE"
+        seed_mode_trigger_source = "family_confirmation"
+        seed_mode_trigger_reason = (
+            "unresolved_loose_clusters_or_reconfirmation_backlog"
+            if requires_reconfirmation_count > 0
+            else "unresolved_loose_clusters_or_promotion_blockers"
+        )
     elif family_stalled:
         triggered_action_type = "family_diversification"
         seed_mode_override = "SEED_EXPLORE"
+        seed_mode_trigger_source = "family_confirmation"
+        seed_mode_trigger_reason = (
+            f"family_stagnation_count>={FAMILY_STAGNATION_TRIGGER_THRESHOLD}"
+        )
+    elif confirmed_family_count >= FAMILY_CONFIRMED_VULN_DISCOVERY_THRESHOLD:
+        triggered_action_type = "family_confirmed_depth_followup"
+        seed_mode_override = "VULN_DISCOVERY"
+        seed_mode_trigger_source = "family_confirmation"
+        seed_mode_trigger_reason = (
+            f"confirmed_family_count>={FAMILY_CONFIRMED_VULN_DISCOVERY_THRESHOLD}"
+        )
+    elif confirmed_family_count == 1:
+        triggered_action_type = "family_single_confirmed_explore"
+        seed_mode_override = "SEED_EXPLORE"
+        seed_mode_trigger_source = "family_confirmation"
+        seed_mode_trigger_reason = "single_confirmed_family_keep_exploring"
     elif coverage_target_stalled:
         triggered_action_type = "coverage_target_stall_followup"
         seed_mode_override = "SEED_EXPLORE"
@@ -1713,6 +1864,8 @@ def choose_next_session_plan(
         "coverage_target_stall_threshold": COVERAGE_TARGET_STALL_THRESHOLD,
         "harness_decision_trace": harness_decision_trace,
         "seed_mode_override": seed_mode_override,
+        "seed_mode_trigger_source": seed_mode_trigger_source,
+        "seed_mode_trigger_reason": seed_mode_trigger_reason,
         "reseed_triggered": bool(
             binary_reseed_targets
             if target_mode == "binary"
@@ -1783,6 +1936,9 @@ def choose_next_session_plan(
         "binary_coverage_proxy": dict(binary_runtime.get("coverage_proxy") or {}),
         "ida_fact_source": binary_runtime.get("ida_fact_source"),
         "ida_refresh_task_id": binary_runtime.get("ida_refresh_task_id"),
+        "family_confirmed_count": confirmed_family_count,
+        "family_requires_reconfirmation_count": requires_reconfirmation_count,
+        "family_reconfirmation_threshold_rounds": family_reconfirmation_threshold,
         "family_stagnation_count": family_stagnation_count,
         "family_diversification_triggered": family_stalled,
         "family_confirmation_backlog_count": len(unresolved_loose_clusters),
@@ -2285,6 +2441,8 @@ def apply_round_results_to_campaign(
     round_exact = set(family_inventory["trace_exact_signatures"])
     round_loose = set(family_inventory["loose_vulnerable_state_clusters"])
     round_confirmed = set(family_inventory["confirmed_families"])
+    current_session_index = int(round_record.get("session_index") or int(state.get("session_count") or 0) + 1)
+    reconfirmation_threshold_rounds = _family_reconfirmation_threshold(state)
     round_unresolved_entries = [
         dict(item)
         for item in (family_inventory.get("unresolved_loose_clusters") or [])
@@ -2307,6 +2465,92 @@ def apply_round_results_to_campaign(
     existing_confirmed.update(round_confirmed)
     loose_cluster_details.update(dict(family_inventory.get("loose_cluster_details") or {}))
     confirmed_family_details.update(dict(family_inventory.get("confirmed_family_details") or {}))
+    for family_key in sorted(existing_confirmed):
+        previous_detail = dict((state_family_inventory.get("confirmed_family_details") or {}).get(family_key) or {})
+        current_detail = dict(confirmed_family_details.get(family_key) or {})
+        merged_detail = {**previous_detail, **current_detail}
+        merged_detail["confirmed_family_key"] = family_key
+        merged_detail["first_confirmed_round_task_id"] = (
+            previous_detail.get("first_confirmed_round_task_id")
+            or current_detail.get("first_confirmed_round_task_id")
+            or round_task_id
+        )
+        merged_detail["last_confirmed_round_task_id"] = (
+            round_task_id
+            if family_key in round_confirmed
+            else (
+                current_detail.get("last_confirmed_round_task_id")
+                or previous_detail.get("last_confirmed_round_task_id")
+            )
+        )
+        merged_detail["first_confirmed_at"] = (
+            previous_detail.get("first_confirmed_at")
+            or current_detail.get("first_confirmed_at")
+            or now_iso
+        )
+        merged_detail["last_confirmed_at"] = (
+            now_iso
+            if family_key in round_confirmed
+            else (
+                current_detail.get("last_confirmed_at")
+                or previous_detail.get("last_confirmed_at")
+            )
+        )
+        merged_detail["first_confirmed_session_index"] = int(
+            previous_detail.get("first_confirmed_session_index")
+            or current_detail.get("first_confirmed_session_index")
+            or current_session_index
+        )
+        if family_key in round_confirmed:
+            merged_detail["last_confirmed_session_index"] = current_session_index
+            merged_detail["last_reconfirmed_session_index"] = current_session_index
+            merged_detail["confirmation_count"] = int(previous_detail.get("confirmation_count") or 0) + 1
+            merged_detail["requires_reconfirmation"] = False
+        else:
+            merged_detail["last_confirmed_session_index"] = int(
+                current_detail.get("last_confirmed_session_index")
+                or previous_detail.get("last_confirmed_session_index")
+                or merged_detail.get("first_confirmed_session_index")
+                or 0
+            )
+            merged_detail["last_reconfirmed_session_index"] = int(
+                current_detail.get("last_reconfirmed_session_index")
+                or previous_detail.get("last_reconfirmed_session_index")
+                or merged_detail.get("last_confirmed_session_index")
+                or 0
+            )
+            merged_detail["confirmation_count"] = int(
+                current_detail.get("confirmation_count")
+                or previous_detail.get("confirmation_count")
+                or 0
+            )
+        observed_signatures = {
+            str(item).strip()
+            for item in list(previous_detail.get("observed_signatures") or [])
+            + list(current_detail.get("observed_signatures") or [])
+            + list(previous_detail.get("exact_signatures") or [])
+            + list(current_detail.get("exact_signatures") or [])
+            if str(item).strip()
+        }
+        for value in [
+            previous_detail.get("family_exact_signature"),
+            previous_detail.get("signature"),
+            current_detail.get("family_exact_signature"),
+            current_detail.get("signature"),
+        ]:
+            candidate = str(value or "").strip()
+            if candidate:
+                observed_signatures.add(candidate)
+        merged_detail["observed_signatures"] = sorted(observed_signatures)
+        merged_detail["family_lineage"] = (
+            current_detail.get("family_lineage")
+            or current_detail.get("lineage")
+            or previous_detail.get("family_lineage")
+            or previous_detail.get("lineage")
+            or {}
+        )
+        merged_detail["reconfirmation_threshold_rounds"] = reconfirmation_threshold_rounds
+        confirmed_family_details[family_key] = merged_detail
     unresolved_map = {
         key: value
         for key, value in existing_unresolved_map.items()
@@ -2356,6 +2600,11 @@ def apply_round_results_to_campaign(
             "last_new_confirmed_families": new_confirmed,
         }
     )
+    state_family_inventory = _refresh_family_reconfirmation_state(
+        state_family_inventory,
+        current_session_index=current_session_index,
+        threshold_rounds=reconfirmation_threshold_rounds,
+    )
     state["family_inventory"] = state_family_inventory
     metrics["trace_exact_signature_count"] = len(existing_exact)
     metrics["loose_cluster_count"] = len(existing_loose)
@@ -2377,6 +2626,7 @@ def apply_round_results_to_campaign(
         "last_new_confirmed_family_count": len(new_confirmed),
         "unresolved_loose_cluster_count": len(unresolved_map),
         "promotion_blocker_count": len(promotion_blockers),
+        "requires_reconfirmation_count": int(state_family_inventory.get("requires_reconfirmation_count") or 0),
         "last_unresolved_loose_clusters": list(unresolved_map.values())[-8:],
         "last_promotion_blockers": promotion_blockers[-8:],
         "resolved_unresolved_clusters": resolved_unresolved_clusters,
@@ -3083,6 +3333,15 @@ def prepare_session_round_task(
         "campaign_system_feedback_consumed": session_plan.get("system_feedback_consumed") or {},
         "campaign_family_diversification_triggered": bool(session_plan.get("family_diversification_triggered")),
         "campaign_family_stagnation_count": int(session_plan.get("family_stagnation_count") or 0),
+        "campaign_seed_mode_trigger_source": session_plan.get("seed_mode_trigger_source"),
+        "campaign_seed_mode_trigger_reason": session_plan.get("seed_mode_trigger_reason"),
+        "campaign_family_confirmed_count": int(session_plan.get("family_confirmed_count") or 0),
+        "campaign_family_requires_reconfirmation_count": int(
+            session_plan.get("family_requires_reconfirmation_count") or 0
+        ),
+        "campaign_family_reconfirmation_threshold_rounds": int(
+            session_plan.get("family_reconfirmation_threshold_rounds") or 0
+        ),
         "campaign_family_confirmation_backlog_count": int(session_plan.get("family_confirmation_backlog_count") or 0),
         "campaign_family_confirmation_selected_clusters": session_plan.get("family_confirmation_selected_clusters") or [],
         "campaign_family_promotion_blockers": session_plan.get("family_promotion_blockers") or [],
@@ -3220,6 +3479,8 @@ def write_campaign_runtime_artifacts(
             "loose_cluster_count": len((state.get("family_inventory") or {}).get("loose_vulnerable_state_clusters") or []),
             "confirmed_family_count": len((state.get("family_inventory") or {}).get("confirmed_families") or []),
             "unresolved_loose_cluster_count": len((state.get("family_inventory") or {}).get("unresolved_loose_clusters") or []),
+            "requires_reconfirmation_count": int((state.get("family_inventory") or {}).get("requires_reconfirmation_count") or 0),
+            "reconfirmation_threshold_rounds": int((state.get("family_inventory") or {}).get("reconfirmation_threshold_rounds") or 0),
             "promotion_blocker_count": len((state.get("family_inventory") or {}).get("promotion_blockers") or []),
             "last_trace_family_manifest_path": (state.get("family_inventory") or {}).get("last_trace_family_manifest_path"),
             "last_repro_family_manifest_path": (state.get("family_inventory") or {}).get("last_repro_family_manifest_path"),

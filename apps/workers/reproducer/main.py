@@ -27,6 +27,61 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 logger = logging.getLogger("reproducer-worker")
 
 
+def _cluster_summary_map(family_plan: dict) -> dict[str, dict]:
+    return {
+        str(item.get("loose_cluster_key") or "").strip(): dict(item)
+        for item in (family_plan.get("cluster_summaries") or [])
+        if isinstance(item, dict) and str(item.get("loose_cluster_key") or "").strip()
+    }
+
+
+def _build_patch_family_priority(entry: dict, cluster_summary: dict) -> dict:
+    requires_reconfirmation = bool(entry.get("requires_reconfirmation"))
+    cluster_crash_count = int(
+        cluster_summary.get("crash_count")
+        or len(cluster_summary.get("member_candidate_ids") or [])
+        or 1
+    )
+    cluster_priority_rank = int(cluster_summary.get("priority_rank") or 0)
+    selection_score = float(entry.get("selection_score") or 0.0)
+    priority_score = round(
+        (1000.0 if requires_reconfirmation else 0.0)
+        + cluster_crash_count * 25.0
+        + max(selection_score, 0.0) * 10.0
+        - cluster_priority_rank,
+        4,
+    )
+    priority_reason = (
+        "requires_reconfirmation_then_cluster_crash_count"
+        if requires_reconfirmation
+        else "cluster_crash_count_then_selection_score"
+    )
+    return {
+        "requires_reconfirmation": requires_reconfirmation,
+        "reconfirmation_trigger": entry.get("reconfirmation_trigger"),
+        "reconfirmation_round_gap": int(entry.get("reconfirmation_round_gap") or 0),
+        "reconfirmation_threshold_rounds": entry.get("reconfirmation_threshold_rounds"),
+        "loose_cluster_key": entry.get("family_loose_cluster_key"),
+        "confirmed_family_key": entry.get("family_confirmed_family_key"),
+        "cluster_crash_count": cluster_crash_count,
+        "cluster_priority_rank": cluster_priority_rank,
+        "selection_score": selection_score,
+        "priority_score": priority_score,
+        "priority_reason": priority_reason,
+    }
+
+
+def _patch_reference_sort_key(entry: dict) -> tuple:
+    family_priority = dict(entry.get("family_priority") or {})
+    return (
+        0 if bool(family_priority.get("requires_reconfirmation")) else 1,
+        -int(family_priority.get("cluster_crash_count") or 0),
+        int(family_priority.get("cluster_priority_rank") or 0),
+        -float(entry.get("selection_score") or 0.0),
+        str(entry.get("candidate_id") or ""),
+    )
+
+
 def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) -> None:
     logger.info("reproducer received task %s", task_id)
     task_store.update_status(
@@ -51,6 +106,7 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
         active_harness_name=active.get("name"),
         campaign_state=campaign_state,
     )
+    cluster_summaries = _cluster_summary_map(family_plan)
 
     confirmed_entries: list[dict] = []
     blocked_entries: list[dict] = []
@@ -80,6 +136,9 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
             "selection_reason": selected.get("selection_reason"),
             "already_confirmed_family": bool(selected.get("already_confirmed_family")),
             "requires_reconfirmation": bool(selected.get("requires_reconfirmation")),
+            "reconfirmation_trigger": selected.get("reconfirmation_trigger"),
+            "reconfirmation_round_gap": int(selected.get("reconfirmation_round_gap") or 0),
+            "reconfirmation_threshold_rounds": selected.get("reconfirmation_threshold_rounds"),
             "known_confirmed_signatures": selected.get("known_confirmed_signatures") or [],
             "selection_score": selected.get("selection_score"),
             "family_exact_signature": traced.get("family_exact_signature") or traced.get("signature"),
@@ -103,6 +162,8 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
             "family_lineage": outcome.get("lineage") or {},
             "attempts": attempt_dicts,
         }
+        cluster_summary = cluster_summaries.get(str(traced.get("family_loose_cluster_key") or "").strip(), {})
+        candidate_result["family_priority"] = _build_patch_family_priority(candidate_result, cluster_summary)
         if outcome.get("confirmed"):
             pov_record = build_pov_record(traced)
             if binary_mode:
@@ -219,7 +280,12 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
         ],
     }
     family_manifest_path = write_repro_family_manifest(task_id, family_manifest_payload)
-    selected_reference = confirmed_entries[0] if confirmed_entries else (blocked_entries[0] if blocked_entries else {})
+    selected_reference_candidates = confirmed_entries or blocked_entries
+    selected_reference = (
+        sorted(selected_reference_candidates, key=_patch_reference_sort_key)[0]
+        if selected_reference_candidates
+        else {}
+    )
     selected_traced = dict(
         next(
             (
@@ -245,7 +311,7 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
         "crash_source": selected_traced.get("crash_source") or selected_reference.get("crash_source"),
         "replay_attempts": len(all_attempts),
         "stable_replays": sum(int(entry.get("stable_replays") or 0) for entry in confirmed_entries),
-        "closure_mode": confirmed_entries[0].get("closure_mode") if confirmed_entries else None,
+        "closure_mode": selected_reference.get("closure_mode"),
         "target_mode": selected_traced.get("target_mode"),
         "binary_provenance": selected_traced.get("binary_provenance"),
         "binary_origin_task_id": selected_traced.get("binary_origin_task_id"),
@@ -256,11 +322,13 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
         "binary_execution_command": selected_traced.get("binary_execution_command"),
         "input_mode": selected_traced.get("input_mode"),
         "testcase_path": selected_traced.get("testcase_path"),
-        "source_traced_crash": confirmed_entries[0].get("source_traced_crash") if confirmed_entries else None,
+        "source_traced_crash": selected_reference.get("source_traced_crash"),
         "source_traced_crashes": [entry.get("source_traced_crash") for entry in confirmed_entries if entry.get("source_traced_crash")],
         "pov_paths": pov_paths,
         "attempts": all_attempts,
         "candidate_results": confirmed_entries + blocked_entries,
+        "patch_selected_candidate_id": selected_reference.get("candidate_id"),
+        "patch_selected_family_priority": selected_reference.get("family_priority") or {},
         "confirmed_family_keys": sorted(
             {
                 str(entry.get("family_confirmed_family_key") or "").strip()
@@ -322,7 +390,7 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
             "repro_completed_at": task_store.now(),
             "repro_manifest_path": str(manifest_path),
             "repro_family_manifest_path": str(family_manifest_path),
-            "pov_path": pov_paths[0],
+            "pov_path": selected_reference.get("pov_path") or (pov_paths[0] if pov_paths else None),
             "patch_priority_manifest_path": str(patch_priority_path),
             "active_harness": selected_traced.get("harness_name"),
             "active_harness_path": selected_traced.get("binary_path"),
@@ -331,10 +399,12 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
             "binary_origin_task_id": selected_traced.get("binary_origin_task_id"),
             "binary_analysis_backend": selected_traced.get("binary_analysis_backend"),
             "trace_mode": selected_traced.get("trace_mode"),
-            "closure_mode": confirmed_entries[0].get("closure_mode"),
+            "closure_mode": selected_reference.get("closure_mode"),
             "family_confirmed_family_keys": manifest_payload.get("confirmed_family_keys"),
             "family_confirmed_family_count": len(manifest_payload.get("confirmed_family_keys") or []),
             "family_unresolved_loose_cluster_count": len(unresolved_loose_clusters),
+            "patch_selected_candidate_id": manifest_payload.get("patch_selected_candidate_id"),
+            "patch_selected_family_priority": manifest_payload.get("patch_selected_family_priority"),
         },
     )
     patch_followup_task_id = maybe_enqueue_patch_followup(task_id, task_store, queue)

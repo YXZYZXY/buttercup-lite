@@ -799,6 +799,11 @@ def _load_traced_crash(runtime: dict[str, Any]) -> dict[str, Any]:
     return {}
 
 
+def _load_patch_selected_family_priority(runtime: dict[str, Any]) -> dict[str, Any]:
+    repro_manifest = _load_json(_host_path(runtime.get("repro_manifest_path")))
+    return dict(repro_manifest.get("patch_selected_family_priority") or {})
+
+
 def _symbolize_trace_frames(runtime: dict[str, Any]) -> list[dict[str, Any]]:
     traced = _load_traced_crash(runtime)
     binary_path = _host_path(traced.get("binary_path"))
@@ -1759,6 +1764,7 @@ def _rank_patch_candidates(*, vuln_id: str, metadata: dict[str, Any], runtime: d
     scenario = str(metadata.get("patch_creation_strategy", "trace_ranked_semantic"))
     task_id = str(metadata.get("patch_base_task_id") or metadata.get("task_id") or "")
     patch_ground_truth_mode = _resolve_patch_ground_truth_mode(metadata)
+    patch_selected_family_priority = _load_patch_selected_family_priority(runtime)
     alignment = _load_json(patch_root_cause_alignment_manifest_path(task_id))
     if not alignment:
         alignment = _trace_alignment(metadata, runtime)
@@ -1788,6 +1794,7 @@ def _rank_patch_candidates(*, vuln_id: str, metadata: dict[str, Any], runtime: d
             "sort_weight_gt_bonus": 0.0,
             "sort_weight_effective_score": float(candidates[0].get("ranking_score") or 0.0),
             "patch_ground_truth_mode": patch_ground_truth_mode,
+            "patch_selected_family_priority": patch_selected_family_priority,
         }
         return [selected], selected
 
@@ -1961,6 +1968,7 @@ def _rank_patch_candidates(*, vuln_id: str, metadata: dict[str, Any], runtime: d
                 "repair_family_priority": family_priority,
                 "repair_family_priority_reason": family_priority_reason,
                 "observed_crash_type": traced_crash.get("crash_type") or traced_crash.get("crash_state"),
+                "patch_selected_family_priority": patch_selected_family_priority,
                 "prompt_template_id": candidate.get("prompt_template_id"),
             }
         )
@@ -2022,10 +2030,16 @@ def _build_patch_llm_messages(
         )
         if family
     ]
+    patch_selected_family_priority = dict(
+        (candidate_ranking[0] or {}).get("patch_selected_family_priority")
+        if candidate_ranking
+        else {}
+    )
     prompt_payload = {
         "task_id": task_id,
         "patch_target_vuln_id": vuln_id,
         "observed_crash_type": traced_crash.get("crash_type") or traced_crash.get("crash_state"),
+        "patch_selected_family_priority": patch_selected_family_priority,
         "repair_family_priority": repair_family_priority,
         "repair_family_priority_reason": (candidate_ranking[0] or {}).get("repair_family_priority_reason") if candidate_ranking else None,
         "retry_target_family": _retry_target_family(metadata),
@@ -2793,6 +2807,9 @@ def write_patch_creation(
         "generated_at": now,
         "patch_target_vuln_id": vuln_id,
         "patch_ground_truth_mode": patch_ground_truth_mode,
+        "patch_selected_family_priority": dict(
+            (selected_candidate or {}).get("patch_selected_family_priority") or {}
+        ),
         "observed_crash_type": observed_crash_type,
         "repair_family_priority": repair_family_priority,
         "repair_family_priority_reason": (selected_candidate or {}).get("repair_family_priority_reason"),
@@ -2817,6 +2834,9 @@ def write_patch_creation(
             "generated_at": now,
             "patch_target_vuln_id": vuln_id,
             "patch_ground_truth_mode": patch_ground_truth_mode,
+            "patch_selected_family_priority": dict(
+                (selected_candidate or {}).get("patch_selected_family_priority") or {}
+            ),
             "patch_synthesis_type": patch_synthesis_type,
             "prompt_template_id": prompt_template_id,
             "known_fix_path_reached": known_fix_path_reached,
@@ -2842,6 +2862,9 @@ def write_patch_creation(
             "generated_at": now,
             "patch_target_vuln_id": vuln_id,
             "patch_ground_truth_mode": patch_ground_truth_mode,
+            "patch_selected_family_priority": dict(
+                (selected_candidate or {}).get("patch_selected_family_priority") or {}
+            ),
             "strategy_families": [
                 {
                     "strategy_family": candidate.get("strategy_family"),
@@ -2850,6 +2873,7 @@ def write_patch_creation(
                     "prompt_template_id": candidate.get("prompt_template_id"),
                     "generalizable": candidate.get("generalizable"),
                     "ground_truth_dependency": candidate.get("ground_truth_dependency"),
+                    "patch_selected_family_priority": candidate.get("patch_selected_family_priority") or {},
                     "sort_weight_gt_bonus": candidate.get("sort_weight_gt_bonus"),
                     "sort_weight_effective_score": candidate.get("sort_weight_effective_score"),
                 }
