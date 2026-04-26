@@ -1,0 +1,367 @@
+{
+  "generated_at": "2026-04-26T09:01:11.900511+00:00",
+  "report_kind": "integration_proof_after_patch_plane",
+  "proof_root": "/home/buttercup2/Project/buttercup-lite/runtime/proof_runs/20260426T134345+0800_integration_after_patch_plane_3h",
+  "verification_mode": "integration_after_patch_plane_3h",
+  "code_modifications_performed": false,
+  "phase0_disk_cleanup": {
+    "report_paths": {
+      "audit": "/home/buttercup2/Project/buttercup-lite/reports/integration_proof_disk_audit.json",
+      "plan": "/home/buttercup2/Project/buttercup-lite/reports/integration_proof_disk_plan.json",
+      "execution": "/home/buttercup2/Project/buttercup-lite/reports/integration_proof_disk_execution.json",
+      "postcheck": "/home/buttercup2/Project/buttercup-lite/reports/integration_proof_disk_postcheck.json"
+    },
+    "pre_proof_free_gib": 110.297,
+    "pre_proof_threshold_gib": 110.0,
+    "pre_proof_threshold_met": true,
+    "phase0_gate": "passed",
+    "current_free_gib_after_proof": 95.971
+  },
+  "runtime_configuration": {
+    "provider": "official_deepseek_api",
+    "base_url": "https://api.deepseek.com",
+    "model": "deepseek-chat",
+    "key_hash_prefix": "7935a2c7fd5b",
+    "official_api_only": true,
+    "slot_config_path": "/home/buttercup2/Project/buttercup-lite/runtime/proof_runs/20260426T134345+0800_integration_after_patch_plane_3h/slot_controller_config.json",
+    "bootstrap_manifest_path": "/home/buttercup2/Project/buttercup-lite/runtime/proof_runs/20260426T134345+0800_integration_after_patch_plane_3h/cjson_patch/bootstrap_manifest.json"
+  },
+  "proof_window": {
+    "requested_duration_seconds": 10800,
+    "cjson_runner_started_at": "2026-04-26T05:49:28.123179+00:00",
+    "slot_controller_finished_at": "2026-04-26T08:50:18.322145+00:00",
+    "slot_controller_duration_seconds": 10850.199,
+    "slot_controller_remaining_seconds": 0,
+    "cjson_completion_manifest_exists": false,
+    "cjson_runner_overran_budget": true,
+    "cjson_runner_stop_mode": "manual_stop_after_budget_overrun",
+    "cjson_runner_stop_observation": {
+      "task_status_at_stop": "TRACING",
+      "task_updated_at": "2026-04-26T08:52:48.385595+00:00",
+      "completion_manifest_missing": true,
+      "reason": "source runner remained in TRACING after 3h budget and did not emit completion_manifest"
+    }
+  },
+  "slots": {
+    "cjson_source_patch": {
+      "slot_name": "cjson_source_patch_inline_runner",
+      "task_ids": {
+        "source_task_id": "6c330116-d33e-45fd-afe6-dcf6f5d1e8fa",
+        "patch_task_id": "0e182987-ddb5-4a28-8e30-7587e5a49e52"
+      },
+      "log_paths": {
+        "bootstrap_manifest": "/home/buttercup2/Project/buttercup-lite/runtime/proof_runs/20260426T134345+0800_integration_after_patch_plane_3h/cjson_patch/bootstrap_manifest.json",
+        "events_jsonl": "/home/buttercup2/Project/buttercup-lite/runtime/proof_runs/20260426T134345+0800_integration_after_patch_plane_3h/cjson_patch/events.jsonl"
+      },
+      "provider": {
+        "provider": "official_deepseek_api",
+        "base_url": "https://api.deepseek.com",
+        "model": "deepseek-chat",
+        "key_hash_prefix": "7935a2c7fd5b",
+        "real_llm_verified": true,
+        "fallback_used": false
+      },
+      "source_runtime": {
+        "status_at_stop": "TRACING",
+        "updated_at": "2026-04-26T08:52:48.385595+00:00",
+        "trace_input_count": 800,
+        "traced_crash_count": 800,
+        "exact_coverage_available": true,
+        "coverage_exact_or_partial": "exact",
+        "coverage_feedback_triggered": true,
+        "coverage_feedback_action": "seed_generation_boost",
+        "coverage_feedback_seed_task_mode": "SEED_EXPLORE",
+        "coverage_feedback_reason": "llvm coverage stalled: line_delta=0.0, function_delta=0.0, threshold=0.005",
+        "llm_request_count_observed": 3,
+        "llm_http_status_observed": 200,
+        "llm_failure_reason": null
+      },
+      "patch_plane": {
+        "patch_attempt_count": 4,
+        "patch_accepted_count": 0,
+        "patch_rejection_gate_distribution": {
+          "pov_replay": 1
+        },
+        "blind_patch_ratio": 1.0,
+        "reflection_family_switch_count": 3,
+        "patch_ground_truth_mode": "blind",
+        "deterministic_template_applied": false,
+        "known_fix_path_reached": false,
+        "patch_synthesis_type": "bounds_check",
+        "families_attempted": [
+          "bounds_check",
+          "null_check",
+          "failure_propagation",
+          "bounds_check"
+        ],
+        "prompt_templates_attempted": [
+          "blind_bounds_check_v1",
+          "blind_null_check_v1__trace__pov_replay_gate__attempt2",
+          "blind_failure_propagation_v1__callgraph__pov_replay_gate__attempt3",
+          "blind_bounds_check_v1__callgraph__pov_replay_gate__attempt4"
+        ],
+        "qe_gate_summary": {
+          "final_verdict": "PATCH_REJECTED",
+          "rejection_gate": "pov_replay",
+          "rejection_reason": "POV_STILL_CRASHES",
+          "gates": {
+            "apply": {
+              "attempted": true,
+              "result": "passed",
+              "skip_reason": null,
+              "failure_reason": null
+            },
+            "build": {
+              "attempted": true,
+              "result": "passed",
+              "skip_reason": null,
+              "failure_reason": null
+            },
+            "pov_replay": {
+              "attempted": true,
+              "result": "failed",
+              "skip_reason": null,
+              "failure_reason": "POV_STILL_CRASHES"
+            },
+            "regression": {
+              "attempted": false,
+              "result": "skipped",
+              "skip_reason": "PREREQUISITE_FAILED",
+              "failure_reason": null
+            }
+          }
+        }
+      },
+      "residual_issue": "runner exceeded 3h budget and remained in TRACING without completion_manifest; manually stopped after proof deadline"
+    },
+    "expat_generalized": {
+      "slot_name": "integration_expat_generalized",
+      "campaign_task_ids": [
+        "a5a3f418-683c-4f7b-a6b0-4a1baf1f2d19",
+        "ab872a89-7d9d-45bd-b927-54624b704da6",
+        "d068bed7-ff00-44f7-8d01-1768e0c5a2c2",
+        "9c9c91fe-264e-43fb-b973-7db5b4acd15f",
+        "61b713d9-bd31-4d31-bb62-63a5aad8d4b5"
+      ],
+      "log_paths": [
+        "/home/buttercup2/Project/buttercup-lite/runtime/proof_runs/20260426T134345+0800_integration_after_patch_plane_3h/slot_controller/integration_expat_generalized/continuation_001/stdout.log",
+        "/home/buttercup2/Project/buttercup-lite/runtime/proof_runs/20260426T134345+0800_integration_after_patch_plane_3h/slot_controller/integration_expat_generalized/continuation_002/stdout.log",
+        "/home/buttercup2/Project/buttercup-lite/runtime/proof_runs/20260426T134345+0800_integration_after_patch_plane_3h/slot_controller/integration_expat_generalized/continuation_003/stdout.log",
+        "/home/buttercup2/Project/buttercup-lite/runtime/proof_runs/20260426T134345+0800_integration_after_patch_plane_3h/slot_controller/integration_expat_generalized/continuation_004/stdout.log",
+        "/home/buttercup2/Project/buttercup-lite/runtime/proof_runs/20260426T134345+0800_integration_after_patch_plane_3h/slot_controller/integration_expat_generalized/continuation_005/stdout.log",
+        "/home/buttercup2/Project/buttercup-lite/runtime/proof_runs/20260426T134345+0800_integration_after_patch_plane_3h/slot_controller/integration_expat_generalized/continuation_001/stdout.log",
+        "/home/buttercup2/Project/buttercup-lite/runtime/proof_runs/20260426T134345+0800_integration_after_patch_plane_3h/slot_controller/integration_expat_generalized/continuation_002/stdout.log",
+        "/home/buttercup2/Project/buttercup-lite/runtime/proof_runs/20260426T134345+0800_integration_after_patch_plane_3h/slot_controller/integration_expat_generalized/continuation_003/stdout.log",
+        "/home/buttercup2/Project/buttercup-lite/runtime/proof_runs/20260426T134345+0800_integration_after_patch_plane_3h/slot_controller/integration_expat_generalized/continuation_004/stdout.log",
+        "/home/buttercup2/Project/buttercup-lite/runtime/proof_runs/20260426T134345+0800_integration_after_patch_plane_3h/slot_controller/integration_expat_generalized/continuation_005/stdout.log"
+      ],
+      "provider": {
+        "provider": "official_deepseek_api",
+        "base_url": "https://api.deepseek.com",
+        "model": "deepseek-chat",
+        "api_calls_per_hour_avg": 53.296
+      },
+      "metrics": {
+        "llm_request_count": 153,
+        "llm_success_count": 40,
+        "llm_failure_count": 0,
+        "fuzz_session_count": 40,
+        "exact_coverage_available": true,
+        "exact_coverage_available_ratio_avg": 1.0,
+        "coverage_exact_sessions": 40,
+        "coverage_queue_drain_rate": 4.625,
+        "coverage_queue_drain_rate_formula": "campaign_coverage_queue_count / fuzz_session_count",
+        "seed_mode_distribution": {
+          "SEED_INIT": 5,
+          "SEED_EXPLORE": 37,
+          "VULN_DISCOVERY": 0
+        },
+        "coverage_stall_trigger_count": 1,
+        "shared_corpus_growth_count": 2560,
+        "cross_lane_import_count": 167,
+        "quality_gate_rejected_count": 49323,
+        "system_compatible_cross_lane_selected_count": 2560,
+        "generalized_candidate_bridge_count": 42,
+        "trace_worthy_candidate_count": 41,
+        "continuous_workspace_reuse_count": 35
+      }
+    },
+    "libyaml_binary": {
+      "slot_name": "integration_libyaml_binary",
+      "campaign_task_ids": [
+        "7e46139a-255d-40e7-833a-91f9855c81a7",
+        "bca56a61-58b1-4a88-a41b-af66b71f97c9",
+        "aa39c2a2-9de3-47d2-b3cc-30681421ebad",
+        "cf8917e6-f938-480c-9816-7234700e18db",
+        "f9ed03cb-f15a-43b3-8009-50a9a164a2ac"
+      ],
+      "log_paths": [
+        "/home/buttercup2/Project/buttercup-lite/runtime/proof_runs/20260426T134345+0800_integration_after_patch_plane_3h/slot_controller/integration_libyaml_binary/continuation_001/stdout.log",
+        "/home/buttercup2/Project/buttercup-lite/runtime/proof_runs/20260426T134345+0800_integration_after_patch_plane_3h/slot_controller/integration_libyaml_binary/continuation_002/stdout.log",
+        "/home/buttercup2/Project/buttercup-lite/runtime/proof_runs/20260426T134345+0800_integration_after_patch_plane_3h/slot_controller/integration_libyaml_binary/continuation_003/stdout.log",
+        "/home/buttercup2/Project/buttercup-lite/runtime/proof_runs/20260426T134345+0800_integration_after_patch_plane_3h/slot_controller/integration_libyaml_binary/continuation_004/stdout.log",
+        "/home/buttercup2/Project/buttercup-lite/runtime/proof_runs/20260426T134345+0800_integration_after_patch_plane_3h/slot_controller/integration_libyaml_binary/continuation_005/stdout.log",
+        "/home/buttercup2/Project/buttercup-lite/runtime/proof_runs/20260426T134345+0800_integration_after_patch_plane_3h/slot_controller/integration_libyaml_binary/continuation_001/stdout.log",
+        "/home/buttercup2/Project/buttercup-lite/runtime/proof_runs/20260426T134345+0800_integration_after_patch_plane_3h/slot_controller/integration_libyaml_binary/continuation_002/stdout.log",
+        "/home/buttercup2/Project/buttercup-lite/runtime/proof_runs/20260426T134345+0800_integration_after_patch_plane_3h/slot_controller/integration_libyaml_binary/continuation_003/stdout.log",
+        "/home/buttercup2/Project/buttercup-lite/runtime/proof_runs/20260426T134345+0800_integration_after_patch_plane_3h/slot_controller/integration_libyaml_binary/continuation_004/stdout.log",
+        "/home/buttercup2/Project/buttercup-lite/runtime/proof_runs/20260426T134345+0800_integration_after_patch_plane_3h/slot_controller/integration_libyaml_binary/continuation_005/stdout.log"
+      ],
+      "provider": {
+        "provider": "official_deepseek_api",
+        "base_url": "https://api.deepseek.com",
+        "model": "deepseek-chat",
+        "api_calls_per_hour_avg": 39.563
+      },
+      "metrics": {
+        "llm_request_count": 116,
+        "llm_success_count": 114,
+        "llm_failure_count": 0,
+        "fuzz_session_count": 114,
+        "exact_coverage_available": false,
+        "exact_coverage_available_ratio_avg": 0.0,
+        "coverage_fallback_sessions": 114,
+        "shared_corpus_growth_count": 1006,
+        "shared_corpus_import_count_total": 50060,
+        "binary_signal_lift_count": 560,
+        "seed_llm_success_log_count": 117,
+        "no_actionable_signal_trace_count": 112,
+        "binary_seed_parse_failure_count": 5
+      }
+    }
+  },
+  "corpus_economy": {
+    "cross_lane_import_count": 167,
+    "quality_gate_rejected_count": 123389,
+    "quality_gate_passed_count": 488463,
+    "compaction_event_count": 13,
+    "system_compatible_compaction_event_count": 5,
+    "generalized_to_source_import_count": 0,
+    "generalized_to_source_examples": [],
+    "notes": "compaction_event_count is derived from proof-window merge manifests with deleted_count > 0"
+  },
+  "fabric_v2": {
+    "namespace": "integration_after_patch_plane_3h::20260426T134345+0800",
+    "continuation_claim_count": 8,
+    "continuation_ack_count": 8,
+    "coverage_claim_count": 145,
+    "coverage_ack_count": 145,
+    "candidate_bridge_claim_count": 145,
+    "candidate_bridge_ack_count": 145,
+    "family_promotion_claim_count": 145,
+    "family_promotion_ack_count": 145,
+    "fabric_recovery_count": 0,
+    "failed_total": 1,
+    "failed_event_at_deadline": {
+      "event_id": "23b48c86-3c7e-4bd9-9db1-743e0ab974a5",
+      "event_type": "work_item_failed",
+      "created_at": "2026-04-26T08:50:13.943348+00:00",
+      "work_item_id": "f91a97e2-60b3-4232-b7e6-921dab13f409",
+      "slot_id": "integration_expat_generalized",
+      "claim_token": "3265c9f5-43ae-46c2-951b-bf7a7eac4108",
+      "campaign_task_id": "61b713d9-bd31-4d31-bb62-63a5aad8d4b5",
+      "details": {
+        "failure_reason": "slot_controller_process_exit_-15:CAMPAIGN_QUEUED",
+        "remaining_seconds": 0,
+        "requeue_on_failure": false,
+        "requeued_work_item_id": null
+      }
+    },
+    "live_chain_examples": [
+      {
+        "slot": "integration_libyaml_binary",
+        "completed_campaign_task_id": "7e46139a-255d-40e7-833a-91f9855c81a7",
+        "continuation_work_item_id": "7a7f8388-8353-44a5-b869-9af668d4d92f",
+        "next_campaign_task_id": "bca56a61-58b1-4a88-a41b-af66b71f97c9"
+      },
+      {
+        "slot": "integration_expat_generalized",
+        "completed_campaign_task_id": "a5a3f418-683c-4f7b-a6b0-4a1baf1f2d19",
+        "continuation_work_item_id": "350c8470-8fc9-42e3-997a-93605d29c89b",
+        "next_campaign_task_id": "ab872a89-7d9d-45bd-b927-54624b704da6"
+      }
+    ]
+  },
+  "overall_health": {
+    "slot_controller_wall_clock_utilization_ratio": 0.9802,
+    "derived_overall_three_slot_utilization_ratio": 0.9854,
+    "idle_gap_total_seconds": 473.257,
+    "llm_failure_count_finalized_slots": 0,
+    "cjson_llm_failure_reason": null,
+    "slot_switch_latency_seconds_avg": 39.561,
+    "slot_switch_latency_count": 8,
+    "api_calls_per_hour_finalized_slots": 87.917,
+    "disk_free_gib_after_proof": 95.971
+  },
+  "best_effort_checks": {
+    "patch_accepted": false,
+    "patch_blocked_at_gate": "pov_replay",
+    "patch_blocked_reason": "POV_STILL_CRASHES",
+    "generalized_to_source_reverse_flow_hit": false,
+    "coverage_stall_to_seed_explore_hit": true,
+    "fabric_lease_recovery_hit": false
+  },
+  "six_fixes_validation": {
+    "coverage_plane_v2": {
+      "validated": true,
+      "evidence": [
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/6c330116-d33e-45fd-afe6-dcf6f5d1e8fa/coverage/feedback_manifest.json",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/6c330116-d33e-45fd-afe6-dcf6f5d1e8fa/task.json",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/a5a3f418-683c-4f7b-a6b0-4a1baf1f2d19/runtime/campaign_runtime_state.json"
+      ]
+    },
+    "fabric_v2": {
+      "validated": true,
+      "evidence": [
+        "/home/buttercup2/Project/buttercup-lite/runtime/proof_runs/20260426T134345+0800_integration_after_patch_plane_3h/slot_controller/slot_controller_state.json",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/_system_fabric/fabric_events.json"
+      ]
+    },
+    "corpus_merger_v2": {
+      "validated": true,
+      "evidence": [
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/497ccb1e-f010-41ed-ba7b-3a40f77ac7e8/runtime/system_compatible_shared_corpus_merge_manifest.json",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/6c330116-d33e-45fd-afe6-dcf6f5d1e8fa/seed/corpus_merge_manifest.json"
+      ]
+    },
+    "patch_blind_synthesis": {
+      "validated": true,
+      "evidence": [
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/0e182987-ddb5-4a28-8e30-7587e5a49e52/patch/patch_creation_manifest.json"
+      ]
+    },
+    "patch_reflection_v2": {
+      "validated": true,
+      "evidence": [
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/0e182987-ddb5-4a28-8e30-7587e5a49e52/patch/patch_reflection_retry_manifest.json",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/0e182987-ddb5-4a28-8e30-7587e5a49e52/patch/reflection_diff_artifact.json"
+      ]
+    },
+    "qe_gate_v2": {
+      "validated": true,
+      "evidence": [
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/0e182987-ddb5-4a28-8e30-7587e5a49e52/patch/qe_gate_summary.json"
+      ]
+    }
+  },
+  "residual_issues": [
+    "cJSON source+patch inline runner exceeded the 3h budget, remained in TRACING, and never emitted completion_manifest; process was manually stopped after deadline.",
+    "No patch reached PATCH_ACCEPTED in the 3h window; the blind patch path remained blocked at pov_replay with POV_STILL_CRASHES.",
+    "generalized_to_source_import_count stayed at 0 during this proof window; reverse corpus flow did not naturally trigger.",
+    "Proof-specific fabric failed_total=1 came from the slot controller deadline killing an in-flight expat campaign work item (slot_controller_process_exit_-15:CAMPAIGN_QUEUED).",
+    "Binary lane still ran in coverage fallback mode for all finalized sessions; this is not a regression signal in this proof, but exact coverage remains unavailable there."
+  ],
+  "artifact_paths": {
+    "slot_controller_state": "/home/buttercup2/Project/buttercup-lite/runtime/proof_runs/20260426T134345+0800_integration_after_patch_plane_3h/slot_controller/slot_controller_state.json",
+    "slot_controller_config": "/home/buttercup2/Project/buttercup-lite/runtime/proof_runs/20260426T134345+0800_integration_after_patch_plane_3h/slot_controller_config.json",
+    "cjson_task": "/home/buttercup2/Project/buttercup-lite/data/tasks/6c330116-d33e-45fd-afe6-dcf6f5d1e8fa/task.json",
+    "cjson_bootstrap_manifest": "/home/buttercup2/Project/buttercup-lite/runtime/proof_runs/20260426T134345+0800_integration_after_patch_plane_3h/cjson_patch/bootstrap_manifest.json",
+    "cjson_events_jsonl": "/home/buttercup2/Project/buttercup-lite/runtime/proof_runs/20260426T134345+0800_integration_after_patch_plane_3h/cjson_patch/events.jsonl",
+    "patch_qe_summary": "/home/buttercup2/Project/buttercup-lite/data/tasks/0e182987-ddb5-4a28-8e30-7587e5a49e52/patch/qe_gate_summary.json",
+    "patch_reflection_retry_manifest": "/home/buttercup2/Project/buttercup-lite/data/tasks/0e182987-ddb5-4a28-8e30-7587e5a49e52/patch/patch_reflection_retry_manifest.json",
+    "reflection_diff_artifact": "/home/buttercup2/Project/buttercup-lite/data/tasks/0e182987-ddb5-4a28-8e30-7587e5a49e52/patch/reflection_diff_artifact.json",
+    "cjson_llm_backend_integrity_report": "/home/buttercup2/Project/buttercup-lite/data/tasks/6c330116-d33e-45fd-afe6-dcf6f5d1e8fa/runtime/llm_backend_integrity_report.json",
+    "cjson_llm_seed_audit_manifest": "/home/buttercup2/Project/buttercup-lite/data/tasks/6c330116-d33e-45fd-afe6-dcf6f5d1e8fa/runtime/llm_seed_audit_manifest.json",
+    "cjson_coverage_feedback_manifest": "/home/buttercup2/Project/buttercup-lite/data/tasks/6c330116-d33e-45fd-afe6-dcf6f5d1e8fa/coverage/feedback_manifest.json"
+  }
+}
