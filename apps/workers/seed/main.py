@@ -10,6 +10,7 @@ from typing import Any
 from benchmarks.seed_fixtures import build_source_heuristic_module as build_benchmark_source_heuristic_module
 from core.buttercup_compat.seed_init import write_seed_init_chain_manifest
 from core.models.task import TaskStatus
+from core.program_model.runtime_query import ProgramModelRuntimeView
 from core.fuzz.queue import maybe_enqueue_fuzz
 from core.queues.redis_queue import QueueNames, RedisQueue
 from core.seed import (
@@ -260,6 +261,124 @@ def _family_stagnation_target_entries(context) -> list[dict[str, Any]]:
     return _ordered_unique_entries(list((context.context_package or {}).get("family_stagnation_targets") or []))
 
 
+def _pm_runtime_query_payload(context) -> dict[str, Any]:
+    return dict((context.context_package or {}).get("pm_runtime_query") or {})
+
+
+def _pm_runtime_target_entries(context) -> list[dict[str, Any]]:
+    return _ordered_unique_entries(list(_pm_runtime_query_payload(context).get("eligible_pool_entries") or []))
+
+
+def _pm_query_summary(context) -> dict[str, Any]:
+    return dict(_pm_runtime_query_payload(context).get("query_summary") or {})
+
+
+def _pm_entry(
+    item: dict[str, Any],
+    *,
+    source: str,
+    reason: str,
+    priority: int,
+) -> dict[str, Any]:
+    return {
+        "name": str(item.get("name") or "").strip(),
+        "file": item.get("file"),
+        "line": item.get("line"),
+        "reason": reason,
+        "queue_kind": "pm_runtime",
+        "source_level": "pm_runtime",
+        "priority": int(priority),
+        "coverage_summary": item.get("coverage_summary"),
+        "eligible_pool_source": source,
+        "pm_query_source": item.get("pm_query_source") or source,
+        "distance": int(item.get("distance") or 0),
+        "relation": item.get("relation"),
+    }
+
+
+def _augment_context_with_dynamic_pm_queries(task_id: str, context):
+    target_name = str((context.target_function or {}).get("name") or "").strip()
+    if not target_name:
+        return context
+    runtime_view = ProgramModelRuntimeView.from_task(task_id)
+    function_context = runtime_view.get_function_context(target_name)
+    caller_entries = _ordered_unique_entries(
+        [
+            _pm_entry(
+                item,
+                source="pm_callers",
+                reason=f"pm_callers::{target_name}",
+                priority=max(10, 42 - int(item.get("distance") or 0)),
+            )
+            for item in list(function_context.get("callers") or [])
+            if str(item.get("name") or "").strip()
+        ]
+    )
+    callee_entries = _ordered_unique_entries(
+        [
+            _pm_entry(
+                item,
+                source="pm_callees",
+                reason=f"pm_callees::{target_name}",
+                priority=max(8, 36 - int(item.get("distance") or 0)),
+            )
+            for item in list(function_context.get("callees") or [])
+            if str(item.get("name") or "").strip()
+        ]
+    )
+    slice_seed_names = [
+        _coverage_entry_name(item)
+        for item in (_exact_uncovered_target_entries(context) or _coverage_target_entries(context))[:3]
+        if _coverage_entry_name(item)
+    ]
+    slice_raw: list[dict[str, Any]] = []
+    for slice_seed_name in slice_seed_names:
+        slice_raw.extend(runtime_view.get_slice_by_entry(slice_seed_name)[:10])
+    slice_entries = _ordered_unique_entries(
+        [
+            _pm_entry(
+                item,
+                source="pm_slice",
+                reason=f"pm_slice::{target_name}",
+                priority=max(6, 30 - int(item.get("distance") or 0)),
+            )
+            for item in slice_raw
+            if str(item.get("name") or "").strip() != target_name
+        ]
+    )
+    expanded_selected_target_functions = _ordered_unique_entries(
+        list(context.selected_target_functions or []),
+        caller_entries,
+        callee_entries,
+        slice_entries,
+    )
+    query_summary = runtime_view.summary_payload()
+    source_counts = {
+        "pm_callers": len(caller_entries),
+        "pm_callees": len(callee_entries),
+        "pm_slice": len(slice_entries),
+    }
+    context.selected_target_functions = expanded_selected_target_functions[:24]
+    context.context_package["pm_runtime_query"] = {
+        "target_function": target_name,
+        "function_context": function_context,
+        "eligible_pool_entries": _ordered_unique_entries(caller_entries, callee_entries, slice_entries),
+        "eligible_pool_size": len(_ordered_unique_entries(caller_entries, callee_entries, slice_entries)),
+        "eligible_pool_source_counts": source_counts,
+        "slice_seed_names": slice_seed_names,
+        "query_summary": query_summary,
+    }
+    context.context_package.setdefault("program_model_interface", {})
+    context.context_package["program_model_interface"]["runtime_query_enabled"] = True
+    context.context_package["program_model_interface"]["runtime_query_methods"] = [
+        "get_function_context",
+        "get_callers",
+        "get_callees",
+        "get_slice_by_entry",
+    ]
+    return context
+
+
 def _coverage_rotation_session_key(task) -> str:
     runtime = task.runtime or {}
     metadata = task.metadata or {}
@@ -320,6 +439,7 @@ def _eligible_rotation_pool_entries(
     rotation_session_key: str | None,
     coverage_pool: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
+    pm_entries = _pm_runtime_target_entries(context)
     retained_pool_entries = sorted(
         (
             dict(item)
@@ -331,6 +451,7 @@ def _eligible_rotation_pool_entries(
         _exact_uncovered_target_entries(context),
         _low_growth_target_entries(context),
         coverage_pool,
+        pm_entries,
         retained_pool_entries,
     )
 
@@ -362,6 +483,7 @@ def _selected_target_record_from_entry(context, entry: dict[str, Any]) -> dict[s
         list(context.callers or []),
         list(context.callees or []),
         list(context.extended_context_functions or []),
+        _pm_runtime_target_entries(context),
         list((context.context_package or {}).get("exact_uncovered_target_functions") or []),
         list((context.context_package or {}).get("family_stagnation_targets") or []),
     ]
@@ -450,9 +572,20 @@ def _build_coverage_request_batches(
     exact_uncovered_entries = _exact_uncovered_target_entries(context)
     low_growth_entries = _low_growth_target_entries(context)
     family_stagnation_entries = _family_stagnation_target_entries(context)
+    pm_runtime_entries = _pm_runtime_target_entries(context)
     ranked_coverage_entries = _ordered_unique_entries(coverage_entries)
-    coverage_pool = _ordered_unique_entries(ranked_coverage_entries, exact_uncovered_entries, low_growth_entries)
-    refill_pool = _ordered_unique_entries(exact_uncovered_entries, low_growth_entries, ranked_coverage_entries)
+    coverage_pool = _ordered_unique_entries(
+        ranked_coverage_entries,
+        exact_uncovered_entries,
+        low_growth_entries,
+        pm_runtime_entries,
+    )
+    refill_pool = _ordered_unique_entries(
+        exact_uncovered_entries,
+        low_growth_entries,
+        ranked_coverage_entries,
+        pm_runtime_entries,
+    )
     rotation_eligible_pool = _eligible_rotation_pool_entries(
         context,
         rotation_session_key=rotation_session_key,
@@ -476,6 +609,11 @@ def _build_coverage_request_batches(
     coverage_names = {_coverage_entry_name(item) for item in coverage_entries if _coverage_entry_name(item)}
     exact_names = {_coverage_entry_name(item) for item in exact_uncovered_entries if _coverage_entry_name(item)}
     low_growth_names = {_coverage_entry_name(item) for item in low_growth_entries if _coverage_entry_name(item)}
+    pm_source_by_name = {
+        _coverage_entry_name(item): str(item.get("eligible_pool_source") or "pm_runtime")
+        for item in pm_runtime_entries
+        if _coverage_entry_name(item)
+    }
     family_stagnation_count = int((context.context_package or {}).get("campaign_family_stagnation_count") or 0)
 
     primary_entry = _claim_next_distinct_entry(
@@ -485,6 +623,8 @@ def _build_coverage_request_batches(
     )
     if primary_entry:
         _remember_recently_used_target(rotation_session_key, primary_entry)
+        primary_name = _coverage_entry_name(primary_entry)
+        primary_focus_source = pm_source_by_name.get(primary_name)
         batches.append(
             {
                 "label": "coverage_queue_top_1",
@@ -492,26 +632,34 @@ def _build_coverage_request_batches(
                 "focus_entries": [primary_entry],
                 "repair_attempts": max(1, seed_generation_attempts),
                 "batch_strategy": (
+                    f"{primary_focus_source}_expansion"
+                    if primary_focus_source
+                    else (
                     "coverage_queue_top_1"
-                    if _coverage_entry_name(primary_entry) in coverage_names
+                    if primary_name in coverage_names
                     else "exact_uncovered_refill"
-                    if _coverage_entry_name(primary_entry) in exact_names
+                    if primary_name in exact_names
                     else "low_growth_rotation"
-                    if _coverage_entry_name(primary_entry) in low_growth_names
+                    if primary_name in low_growth_names
                     else "coverage_pool_rotation"
+                    )
                 ),
-                "primary_target_function": _coverage_entry_name(primary_entry),
+                "primary_target_function": primary_name,
                 "focus_source": (
+                    primary_focus_source
+                    if primary_focus_source
+                    else (
                     "coverage_queue"
-                    if _coverage_entry_name(primary_entry) in coverage_names
+                    if primary_name in coverage_names
                     else "exact_uncovered_snapshot"
-                    if _coverage_entry_name(primary_entry) in exact_names
+                    if primary_name in exact_names
                     else "durable_low_growth_queue"
-                    if _coverage_entry_name(primary_entry) in low_growth_names
+                    if primary_name in low_growth_names
                     else "retained_rotation_pool"
+                    )
                 ),
-                },
-            )
+            },
+        )
 
     secondary_entry = _claim_next_distinct_entry(
         coverage_pool,
@@ -521,6 +669,7 @@ def _build_coverage_request_batches(
     if secondary_entry:
         _remember_recently_used_target(rotation_session_key, secondary_entry)
         secondary_name = _coverage_entry_name(secondary_entry)
+        secondary_focus_source = pm_source_by_name.get(secondary_name)
         batches.append(
             {
                 "label": "coverage_queue_top_2",
@@ -528,6 +677,9 @@ def _build_coverage_request_batches(
                 "focus_entries": [secondary_entry],
                 "repair_attempts": max(1, min(seed_generation_attempts, 2)),
                 "batch_strategy": (
+                    f"{secondary_focus_source}_expansion"
+                    if secondary_focus_source
+                    else (
                     "coverage_queue_top_2"
                     if secondary_name in coverage_names
                     else "exact_uncovered_refill"
@@ -535,9 +687,13 @@ def _build_coverage_request_batches(
                     else "low_growth_rotation"
                     if secondary_name in low_growth_names
                     else "coverage_pool_rotation"
+                    )
                 ),
                 "primary_target_function": secondary_name,
                 "focus_source": (
+                    secondary_focus_source
+                    if secondary_focus_source
+                    else (
                     "coverage_queue"
                     if secondary_name in coverage_names
                     else "exact_uncovered_snapshot"
@@ -545,6 +701,7 @@ def _build_coverage_request_batches(
                     else "durable_low_growth_queue"
                     if secondary_name in low_growth_names
                     else "retained_rotation_pool"
+                    )
                 ),
             },
         )
@@ -591,15 +748,26 @@ def _build_coverage_request_batches(
         if refill_entry:
             _remember_recently_used_target(rotation_session_key, refill_entry)
             refill_name = _coverage_entry_name(refill_entry)
+            refill_focus_source = pm_source_by_name.get(refill_name)
             batches.append(
                 {
                     "label": "exact_uncovered_refill",
                     "focus_reason": "queue diversity exhausted; refilled from the current exact covered=false targets",
                     "focus_entries": [refill_entry],
                     "repair_attempts": max(1, min(seed_generation_attempts, 2)),
-                    "batch_strategy": "exact_uncovered_refill",
+                    "batch_strategy": (
+                        f"{refill_focus_source}_expansion"
+                        if refill_focus_source
+                        else "exact_uncovered_refill"
+                    ),
                     "primary_target_function": refill_name,
-                    "focus_source": "exact_uncovered_snapshot" if refill_name in exact_names else "coverage_queue",
+                    "focus_source": (
+                        refill_focus_source
+                        if refill_focus_source
+                        else "exact_uncovered_snapshot"
+                        if refill_name in exact_names
+                        else "coverage_queue"
+                    ),
                 },
             )
 
@@ -688,6 +856,7 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
     coverage_manifest = _load_json(coverage_manifest_path) if coverage_manifest_path and Path(coverage_manifest_path).exists() else None
     seed_decision = select_seed_task_mode(task, coverage_manifest)
     context = retrieve_context(task_id, harness, task_mode=seed_decision.mode)
+    context = _augment_context_with_dynamic_pm_queries(task_id, context)
     previous_mode_counts = dict(task.runtime.get("seed_mode_counts") or {})
     seed_mode_counts = {
         "SEED_INIT": int(previous_mode_counts.get("SEED_INIT") or 0),
@@ -919,11 +1088,13 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
         rotation_session_key=coverage_rotation_session_key,
     )
     logger.info(
-        "[%s] seed request plan: mode=%s batches=%s coverage_groups=%s",
+        "[%s] seed request plan: mode=%s batches=%s coverage_groups=%s pm_pool=%s pm_queries=%s",
         task_id,
         seed_decision.mode,
         len(coverage_request_batches),
         (context.context_package.get("coverage_exploration_contract") or {}).get("queue_kind_counts") or {},
+        (_pm_runtime_query_payload(context).get("eligible_pool_size") or 0),
+        (_pm_query_summary(context).get("query_call_count") or 0),
     )
     coverage_request_batch_reports: list[dict[str, Any]] = []
     successful_batches: list[dict[str, Any]] = []
@@ -983,6 +1154,7 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
                 "label": batch.get("label"),
                 "batch_strategy": batch.get("batch_strategy"),
                 "focus_source": batch.get("focus_source"),
+                "eligible_pool_source": batch.get("focus_source"),
                 "focus_reason": batch.get("focus_reason"),
                 "primary_target_function": batch.get("primary_target_function"),
                 "focus_target_names": [
@@ -991,6 +1163,8 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
                     if isinstance(item, dict) and item.get("name")
                 ],
                 "repair_attempts_configured": int(batch.get("repair_attempts") or seed_generation_attempts),
+                "eligible_pool_size": int(_pm_runtime_query_payload(context).get("eligible_pool_size") or 0),
+                "eligible_pool_source_counts": dict(_pm_runtime_query_payload(context).get("eligible_pool_source_counts") or {}),
                 "success": False,
             }
             for attempt_index in range(int(batch.get("repair_attempts") or seed_generation_attempts)):
@@ -1294,6 +1468,9 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
             "selected_target_functions": context.selected_target_functions,
             "selection_rationale": context.selection_rationale,
             "program_model_interface": context.context_package.get("program_model_interface", {}),
+            "program_model_query_summary": _pm_query_summary(context),
+            "eligible_pool_size": int(_pm_runtime_query_payload(context).get("eligible_pool_size") or 0),
+            "eligible_pool_source_counts": dict(_pm_runtime_query_payload(context).get("eligible_pool_source_counts") or {}),
         },
         generation_phase={
             "phase": "generate_seeds",
@@ -1378,6 +1555,11 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
         "target_function_path": (context.target_function or {}).get("file"),
         "target_function_line": (context.target_function or {}).get("line"),
         "selected_target_functions": context.selected_target_functions,
+        "eligible_pool_size": int(_pm_runtime_query_payload(context).get("eligible_pool_size") or 0),
+        "eligible_pool_sources": sorted(((_pm_runtime_query_payload(context).get("eligible_pool_source_counts") or {}).keys())),
+        "eligible_pool_source_counts": dict(_pm_runtime_query_payload(context).get("eligible_pool_source_counts") or {}),
+        "program_model_query_call_count": int(_pm_query_summary(context).get("query_call_count") or 0),
+        "program_model_query_summary": _pm_query_summary(context),
         "caller_count": len(context.callers),
         "callee_count": len(context.callees),
         "key_type_count": len(context.key_types),
@@ -1428,6 +1610,10 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
             "selected_target_function": (context.target_function or {}).get("name"),
             "selected_target_functions": context.selected_target_functions,
             "context_package_path": context.context_package_path,
+            "eligible_pool_size": int(_pm_runtime_query_payload(context).get("eligible_pool_size") or 0),
+            "eligible_pool_source_counts": dict(_pm_runtime_query_payload(context).get("eligible_pool_source_counts") or {}),
+            "program_model_query_call_count": int(_pm_query_summary(context).get("query_call_count") or 0),
+            "program_model_query_summary": _pm_query_summary(context),
             "context_backend_contribution_path": str(Path(task.task_dir) / "index" / "context_backend_contribution.json"),
             "target_selection_backend_manifest_path": str(Path(task.task_dir) / "index" / "target_selection_backend_manifest.json"),
             "query_to_target_decision_manifest_path": str(Path(task.task_dir) / "index" / "query_to_target_decision_manifest.json"),

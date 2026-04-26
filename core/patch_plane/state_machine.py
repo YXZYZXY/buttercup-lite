@@ -13,6 +13,7 @@ from typing import Any
 
 from core.builder.contracts import infer_build_capability, resolve_build_capability
 from core.builder.fresh_build import build_ossfuzz_project
+from core.program_model.runtime_query import ProgramModelRuntimeView
 from core.reproducer.pov import build_pov_record
 from core.seed.llm_client import LLMCallError, LLMClient, build_non_llm_metadata, extract_content
 from core.storage.layout import (
@@ -875,6 +876,38 @@ def _source_root(metadata: dict[str, Any], runtime: dict[str, Any]) -> Path:
     raise RuntimeError("patch source root is not available")
 
 
+def _task_id_from_host_path(path_str: str | None) -> str | None:
+    path = _host_path(path_str)
+    if path is None:
+        return None
+    parts = list(path.parts)
+    for index, part in enumerate(parts[:-1]):
+        if part == "tasks":
+            candidate = str(parts[index + 1]).strip()
+            if candidate:
+                return candidate
+    return None
+
+
+def _program_model_task_id(task_id: str, metadata: dict[str, Any], runtime: dict[str, Any]) -> str:
+    candidates = [
+        metadata.get("patch_base_task_id"),
+        runtime.get("patch_base_task_id"),
+        _task_id_from_host_path(runtime.get("source_root")),
+        _task_id_from_host_path(metadata.get("patch_source_path")),
+        _task_id_from_host_path(runtime.get("trace_manifest_path")),
+        _task_id_from_host_path(runtime.get("context_package_path")),
+        task_id,
+    ]
+    for candidate in candidates:
+        normalized = str(candidate or "").strip()
+        if not normalized:
+            continue
+        if (task_root(normalized) / "index" / "function_facts.json").exists():
+            return normalized
+    return task_id
+
+
 def _load_base_context_package(metadata: dict[str, Any], runtime: dict[str, Any]) -> dict[str, Any]:
     candidates = [runtime.get("context_package_path")]
     base_task_id = metadata.get("patch_base_task_id")
@@ -917,7 +950,9 @@ def _context_bundle(task_id: str, metadata: dict[str, Any], runtime: dict[str, A
                 "snippet": first.get("snippet"),
             }
     context_source = _retry_context_source(metadata)
+    reported_context_source = context_source
     supplemental_context: dict[str, Any] = {}
+    alignment = _trace_alignment(metadata, runtime)
     if context_source in {PATCH_CONTEXT_SOURCE_TRACE_EXPANDED, PATCH_CONTEXT_SOURCE_CALL_GRAPH}:
         supplemental_context["related_functions"] = _compact_context_entries(
             context_package.get("related_functions"),
@@ -925,7 +960,6 @@ def _context_bundle(task_id: str, metadata: dict[str, Any], runtime: dict[str, A
         )
         supplemental_context["callers"] = _compact_context_entries(context_package.get("callers"), limit=2)
         supplemental_context["callees"] = _compact_context_entries(context_package.get("callees"), limit=2)
-        alignment = _trace_alignment(metadata, runtime)
         supplemental_context["symbolized_frames"] = [
             {
                 "function": frame.get("function"),
@@ -941,10 +975,17 @@ def _context_bundle(task_id: str, metadata: dict[str, Any], runtime: dict[str, A
             context_package.get("extended_context_functions"),
             limit=3,
         )
+    runtime_view = ProgramModelRuntimeView.from_task(_program_model_task_id(task_id, metadata, runtime))
+    pm_stacktrace_slice = runtime_view.get_slice_by_stacktrace(alignment.get("symbolized_frames") or [])
+    if pm_stacktrace_slice:
+        supplemental_context["pm_stacktrace_slice"] = _compact_context_entries(pm_stacktrace_slice, limit=6)
+        reported_context_source = f"{context_source}+pm_stacktrace_slice"
     return {
-        "context_source": context_source,
+        "context_source": reported_context_source,
+        "context_source_base": context_source,
         "selected_context": selected_context,
         "supplemental_context": supplemental_context,
+        "program_model_query_summary": runtime_view.summary_payload(),
     }
 
 
@@ -2009,6 +2050,7 @@ def _build_patch_llm_messages(
             "snippet": selected_context.get("snippet"),
         },
         "supplemental_context": context_bundle.get("supplemental_context"),
+        "program_model_query_summary": context_bundle.get("program_model_query_summary"),
         "candidate_ranking": [
             {
                 "candidate_id": candidate.get("candidate_id"),
@@ -2126,6 +2168,7 @@ def _build_candidate_specific_materialization_messages(
         },
         "attempted_context_source": context_bundle.get("context_source"),
         "supplemental_context": context_bundle.get("supplemental_context"),
+        "program_model_query_summary": context_bundle.get("program_model_query_summary"),
         "primary_invariant": invariant_report.get("primary_invariant"),
         "vulnerable_invariants": invariant_report.get("invariants"),
         "previous_failed_attempt": metadata.get("patch_retry_context"),
@@ -2732,10 +2775,13 @@ def write_patch_creation(
         selection_source=llm_selection_source,
         llm_selected_candidate=llm_selected_candidate,
     )
+    context_bundle = _context_bundle(task_id, metadata, runtime)
     attempted_repair_family = _normalize_patch_synthesis_family(patch_synthesis_type)
-    attempted_context_source = _retry_context_source(metadata)
+    attempted_context_source = str(context_bundle.get("context_source") or _retry_context_source(metadata))
     observed_crash_type = (selected_candidate or {}).get("observed_crash_type")
     repair_family_priority = list((selected_candidate or {}).get("repair_family_priority") or [])
+    program_model_query_summary = dict(context_bundle.get("program_model_query_summary") or {})
+    pm_stacktrace_slice = list((context_bundle.get("supplemental_context") or {}).get("pm_stacktrace_slice") or [])
     _write(patch_freeform_materialization_manifest_path(task_id), freeform_manifest)
     diff_path = task_root(task_id) / "patch" / "candidate.diff"
     if patch_result is None:
@@ -2760,6 +2806,8 @@ def write_patch_creation(
         "trace_manifest_path": runtime.get("trace_manifest_path"),
         "repro_manifest_path": runtime.get("repro_manifest_path"),
         "context_package_path": runtime.get("context_package_path"),
+        "program_model_query_summary": program_model_query_summary,
+        "pm_stacktrace_slice": pm_stacktrace_slice,
     }
     _write(patch_candidate_ranking_manifest_path(task_id), ranking_payload)
     _write(
@@ -2783,6 +2831,8 @@ def write_patch_creation(
             "candidate_specific_materialization_error": candidate_specific_materialization_error,
             "fallback_selected_candidate": selected_candidate if not llm_selected_candidate else None,
             "candidate_ranking": candidate_ranking,
+            "program_model_query_summary": program_model_query_summary,
+            "pm_stacktrace_slice": pm_stacktrace_slice,
         },
     )
     _write(
@@ -2824,6 +2874,7 @@ def write_patch_creation(
         "trace_context_dependency": "high",
         "selected_target_function": runtime.get("selected_target_function"),
         "selection_source": llm_selection_source,
+        "program_model_query_summary": program_model_query_summary,
     }
     _write(generalized_patch_strategy_manifest_path(task_id), strategy_payload)
     _write(
@@ -2850,6 +2901,8 @@ def write_patch_creation(
             "selection_source": llm_selection_source,
             "freeform_materialization_manifest_path": str(patch_freeform_materialization_manifest_path(task_id)),
             "patch_materialization_mode": materialization_mode,
+            "program_model_query_summary": program_model_query_summary,
+            "pm_stacktrace_slice": pm_stacktrace_slice,
         },
     )
     _write(
@@ -2894,6 +2947,8 @@ def write_patch_creation(
             "llm_vs_rule_agreement": llm_vs_rule_agreement,
             "llm_patch_payload": llm_patch_payload,
             **_llm_fields_from_metadata(llm_metadata),
+            "program_model_query_summary": program_model_query_summary,
+            "pm_stacktrace_slice": pm_stacktrace_slice,
         },
     )
     _write(
@@ -2920,6 +2975,8 @@ def write_patch_creation(
             "candidate_specific_materialization_error": candidate_specific_materialization_error,
             "patch_materialization_mode": materialization_mode,
             "freeform_materialization_manifest_path": str(patch_freeform_materialization_manifest_path(task_id)),
+            "program_model_query_summary": program_model_query_summary,
+            "pm_stacktrace_slice": pm_stacktrace_slice,
         },
     )
     _write(
@@ -2936,6 +2993,7 @@ def write_patch_creation(
             "deterministic_template_applied": deterministic_template_applied,
             "selected_strategy": strategy,
             "deterministic_dependency_level": deterministic_dependency_level,
+            "program_model_query_summary": program_model_query_summary,
         },
     )
     _write(
@@ -2956,6 +3014,8 @@ def write_patch_creation(
             "deterministic_template_role": "not_used",
             "selected_candidate": selected_candidate,
             "llm_patch_payload": llm_patch_payload,
+            "program_model_query_summary": program_model_query_summary,
+            "pm_stacktrace_slice": pm_stacktrace_slice,
             "comparison_verdict": (
                 "typed_blind_llm_patch_text_used"
                 if materialization_mode in {"blind_llm_unified_diff", "blind_llm_typed_repair_diff", "blind_llm_open_ended_repair_diff"}
@@ -3004,6 +3064,9 @@ def write_patch_creation(
             "llm_vs_rule_agreement": llm_vs_rule_agreement,
             "llm_patch_payload": llm_patch_payload,
             "patch_materialization_mode": materialization_mode,
+            "program_model_query_call_count": int(program_model_query_summary.get("query_call_count") or 0),
+            "program_model_query_summary": program_model_query_summary,
+            "pm_stacktrace_slice": pm_stacktrace_slice,
             "verifier_gates_passed": [],
             "generic_open_ended_fallback": {
                 "used": generic_fallback_state.get("used", False),
@@ -3069,6 +3132,9 @@ def write_patch_creation(
         "llm_vs_rule_agreement": llm_vs_rule_agreement,
         "llm_patch_payload": llm_patch_payload,
         "patch_materialization_mode": materialization_mode,
+        "program_model_query_call_count": int(program_model_query_summary.get("query_call_count") or 0),
+        "program_model_query_summary": program_model_query_summary,
+        "pm_stacktrace_slice": pm_stacktrace_slice,
         "freeform_materialization": freeform_manifest,
         "verifier_gates_passed": [],
         **_patch_truth_fields(
