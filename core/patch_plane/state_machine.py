@@ -54,6 +54,10 @@ PATCH_SYNTHESIS_NULL_CHECK = "null_check"
 PATCH_SYNTHESIS_FAILURE_PROPAGATION = "failure_propagation"
 PATCH_SYNTHESIS_LLM_OPEN_ENDED = "llm_open_ended"
 
+PATCH_CONTEXT_SOURCE_ROOT_CAUSE = "root_cause_window"
+PATCH_CONTEXT_SOURCE_TRACE_EXPANDED = "trace_plus_related_context"
+PATCH_CONTEXT_SOURCE_CALL_GRAPH = "call_graph_expanded_context"
+
 NON_BLIND_PATCH_CHANNELS = {"offline_eval", "benchmark_fixture"}
 
 
@@ -143,7 +147,79 @@ def _llm_selection_fallback_triggered(
         "deterministic_fallback",
         "deterministic_fallback_unknown_candidate",
         "deterministic_fallback_llm_failure",
+        "deterministic_rank1",
+        "reflection_retry_family_switch",
     }
+
+
+def _ordered_unique(items: list[str]) -> list[str]:
+    ordered: list[str] = []
+    for item in items:
+        if item and item not in ordered:
+            ordered.append(item)
+    return ordered
+
+
+def _normalize_patch_synthesis_family(value: Any) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in {
+        PATCH_SYNTHESIS_BOUNDS_CHECK,
+        PATCH_SYNTHESIS_NULL_CHECK,
+        PATCH_SYNTHESIS_FAILURE_PROPAGATION,
+        PATCH_SYNTHESIS_LLM_OPEN_ENDED,
+    }:
+        return normalized
+    declared = _strategy_declared_synthesis_type(normalized)
+    if declared is not None:
+        return declared
+    return PATCH_SYNTHESIS_LLM_OPEN_ENDED
+
+
+def _retry_attempt_index(metadata: dict[str, Any]) -> int:
+    try:
+        return max(1, int(metadata.get("PATCH_RETRY_ATTEMPT_INDEX") or 1))
+    except (TypeError, ValueError):
+        return 1
+
+
+def _retry_context_source(metadata: dict[str, Any]) -> str:
+    normalized = str(
+        metadata.get("PATCH_RETRY_CONTEXT_SOURCE")
+        or metadata.get("patch_retry_context_source")
+        or PATCH_CONTEXT_SOURCE_ROOT_CAUSE
+    ).strip().lower()
+    if normalized in {
+        PATCH_CONTEXT_SOURCE_ROOT_CAUSE,
+        PATCH_CONTEXT_SOURCE_TRACE_EXPANDED,
+        PATCH_CONTEXT_SOURCE_CALL_GRAPH,
+    }:
+        return normalized
+    return PATCH_CONTEXT_SOURCE_ROOT_CAUSE
+
+
+def _retry_failure_reason(metadata: dict[str, Any]) -> str | None:
+    value = str(
+        metadata.get("PATCH_RETRY_FAILURE_REASON")
+        or metadata.get("patch_retry_failure_reason")
+        or ""
+    ).strip().lower()
+    return value or None
+
+
+def _retry_target_family(metadata: dict[str, Any]) -> str | None:
+    value = metadata.get("PATCH_RETRY_TARGET_FAMILY") or metadata.get("patch_retry_target_family")
+    normalized = _normalize_patch_synthesis_family(value)
+    if normalized == PATCH_SYNTHESIS_LLM_OPEN_ENDED and not value:
+        return None
+    return normalized
+
+
+def _context_source_short_name(context_source: str) -> str:
+    return {
+        PATCH_CONTEXT_SOURCE_ROOT_CAUSE: "root",
+        PATCH_CONTEXT_SOURCE_TRACE_EXPANDED: "trace",
+        PATCH_CONTEXT_SOURCE_CALL_GRAPH: "callgraph",
+    }.get(context_source, "root")
 
 
 def _verifier_gates_passed(
@@ -338,6 +414,8 @@ def _build_reflection_llm_messages(
     task_id: str,
     qe_verdict: str,
     priority_action: str | None,
+    metadata: dict[str, Any] | None,
+    runtime: dict[str, Any] | None,
     creation_payload: dict[str, Any] | None,
     build_payload: dict[str, Any] | None,
     qe_payload: dict[str, Any] | None,
@@ -346,15 +424,28 @@ def _build_reflection_llm_messages(
     patch_dir = task_root(task_id) / "patch"
     invariant_report = _load_invariant_report(task_id)
     invariant_alignment = _load_json(patch_dir / "vulnerable_invariant_alignment_report.json")
+    runtime = runtime or {}
+    metadata = metadata or {}
     diff_text = ""
     if creation_payload:
         diff_path = _host_path(creation_payload.get("diff_path"))
         if diff_path and diff_path.exists():
             diff_text = diff_path.read_text(encoding="utf-8", errors="ignore")[:4000]
+    current_attempt = _current_attempt_summary(
+        task_id=task_id,
+        metadata=metadata,
+        runtime=runtime,
+        creation_payload=creation_payload,
+        build_payload=build_payload,
+        qe_payload=qe_payload,
+        qe_verdict=qe_verdict,
+        attempt_history=attempt_history,
+    )
     prompt_payload = {
         "task_id": task_id,
         "qe_verdict": qe_verdict,
         "priority_action": priority_action,
+        "current_attempt": current_attempt,
         "selected_candidate": (creation_payload or {}).get("selected_candidate"),
         "selected_strategy": (creation_payload or {}).get("strategy"),
         "selected_target_function": (creation_payload or {}).get("selected_target_function"),
@@ -381,6 +472,7 @@ def _build_reflection_llm_messages(
                         "You are a patch reflection engine deciding the next semantic repair move after build/QE. "
                         "Return strict JSON only. Choose one action from accept, retry, suppress, escalate. "
                         "Use the vulnerable invariant, attempt history, and QE failure to identify the single primary blocker. "
+                        "When current_attempt.failure_reason is llm_fail or diff_not_materialized, the next retry must switch repair family away from the current one. "
                         "If QE says the PoV still reproduces, do not call this a buildability issue. "
                         "For retryable verdicts on early attempts, prefer retry over escalate; escalate only after the "
                         "search has genuinely failed to escape the current local optimum."
@@ -617,6 +709,79 @@ def _source_root(metadata: dict[str, Any], runtime: dict[str, Any]) -> Path:
     raise RuntimeError("patch source root is not available")
 
 
+def _load_base_context_package(metadata: dict[str, Any], runtime: dict[str, Any]) -> dict[str, Any]:
+    candidates = [runtime.get("context_package_path")]
+    base_task_id = metadata.get("patch_base_task_id")
+    if base_task_id:
+        candidates.append(str(task_root(str(base_task_id)) / "index" / "context_package.json"))
+    for candidate in candidates:
+        path = _host_path(candidate)
+        if path and path.exists():
+            return _load_json(path)
+    return {}
+
+
+def _compact_context_entries(entries: list[dict[str, Any]] | None, limit: int) -> list[dict[str, Any]]:
+    compacted: list[dict[str, Any]] = []
+    for entry in list(entries or [])[:limit]:
+        compacted.append(
+            {
+                "name": entry.get("name") or entry.get("symbol") or entry.get("path"),
+                "file": entry.get("file") or entry.get("path"),
+                "line": entry.get("line"),
+                "relation": entry.get("relation") or entry.get("kind"),
+                "snippet": str(entry.get("snippet") or "")[:900],
+            }
+        )
+    return compacted
+
+
+def _context_bundle(task_id: str, metadata: dict[str, Any], runtime: dict[str, Any]) -> dict[str, Any]:
+    context_manifest = _load_json(patch_context_manifest_path(task_id))
+    selected_context = dict(context_manifest.get("selected_context") or {})
+    context_package = _load_base_context_package(metadata, runtime)
+    if not selected_context:
+        source_snippets = list(context_package.get("source_snippets") or [])
+        if source_snippets:
+            first = source_snippets[0]
+            selected_context = {
+                "file_path": first.get("path"),
+                "line_start": first.get("line"),
+                "line_end": first.get("line"),
+                "snippet": first.get("snippet"),
+            }
+    context_source = _retry_context_source(metadata)
+    supplemental_context: dict[str, Any] = {}
+    if context_source in {PATCH_CONTEXT_SOURCE_TRACE_EXPANDED, PATCH_CONTEXT_SOURCE_CALL_GRAPH}:
+        supplemental_context["related_functions"] = _compact_context_entries(
+            context_package.get("related_functions"),
+            limit=3,
+        )
+        supplemental_context["callers"] = _compact_context_entries(context_package.get("callers"), limit=2)
+        supplemental_context["callees"] = _compact_context_entries(context_package.get("callees"), limit=2)
+        alignment = _trace_alignment(metadata, runtime)
+        supplemental_context["symbolized_frames"] = [
+            {
+                "function": frame.get("function"),
+                "file": frame.get("file"),
+                "line": frame.get("line"),
+                "raw_frame": frame.get("raw_frame"),
+            }
+            for frame in list(alignment.get("symbolized_frames") or [])[:4]
+            if isinstance(frame, dict)
+        ]
+    if context_source == PATCH_CONTEXT_SOURCE_CALL_GRAPH:
+        supplemental_context["extended_context_functions"] = _compact_context_entries(
+            context_package.get("extended_context_functions"),
+            limit=3,
+        )
+    return {
+        "context_source": context_source,
+        "selected_context": selected_context,
+        "supplemental_context": supplemental_context,
+    }
+
+
 def _oss_fuzz_project_root(metadata: dict[str, Any], runtime: dict[str, Any]) -> Path:
     candidates = [
         metadata.get("patch_oss_fuzz_project_path"),
@@ -789,12 +954,146 @@ def _infer_patch_synthesis_type_from_blob(evidence_blob: str, strategy: str | No
     return PATCH_SYNTHESIS_LLM_OPEN_ENDED, "evidence_detected:unclassified"
 
 
+def _repair_family_priority_from_crash(
+    *,
+    traced_crash: dict[str, Any],
+    evidence_blob: str,
+) -> tuple[list[str], str]:
+    crash_descriptor = " ".join(
+        str(traced_crash.get(key) or "")
+        for key in ("crash_type", "crash_state", "signal_type", "execution_signal_reason")
+    ).lower()
+    if any(token in crash_descriptor for token in ("heap-buffer-overflow", "stack-buffer-overflow", "global-buffer-overflow", "out-of-bounds")):
+        return [
+            PATCH_SYNTHESIS_BOUNDS_CHECK,
+            PATCH_SYNTHESIS_NULL_CHECK,
+            PATCH_SYNTHESIS_FAILURE_PROPAGATION,
+        ], f"crash_type_priority:{crash_descriptor or 'buffer-overflow'}"
+    if any(token in crash_descriptor for token in ("null-dereference", "segv", "null pointer", "use-after-free")):
+        return [
+            PATCH_SYNTHESIS_NULL_CHECK,
+            PATCH_SYNTHESIS_BOUNDS_CHECK,
+            PATCH_SYNTHESIS_FAILURE_PROPAGATION,
+        ], f"crash_type_priority:{crash_descriptor or 'null-dereference'}"
+    if any(token in crash_descriptor for token in ("assert", "return-value-unchecked", "error-not-propagated", "unexpected eof")):
+        return [
+            PATCH_SYNTHESIS_FAILURE_PROPAGATION,
+            PATCH_SYNTHESIS_BOUNDS_CHECK,
+            PATCH_SYNTHESIS_NULL_CHECK,
+        ], f"crash_type_priority:{crash_descriptor or 'failure-propagation'}"
+    inferred, reason = _infer_patch_synthesis_type_from_blob(evidence_blob)
+    ordered = [inferred] + [
+        family
+        for family in (
+            PATCH_SYNTHESIS_BOUNDS_CHECK,
+            PATCH_SYNTHESIS_NULL_CHECK,
+            PATCH_SYNTHESIS_FAILURE_PROPAGATION,
+        )
+        if family != inferred
+    ]
+    return _ordered_unique(ordered), f"evidence_priority:{reason}"
+
+
+def _family_priority_bonus(
+    candidate_family: str,
+    family_priority: list[str],
+) -> float:
+    bonuses = {0: 0.24, 1: 0.1, 2: 0.04}
+    normalized = _normalize_patch_synthesis_family(candidate_family)
+    try:
+        index = family_priority.index(normalized)
+    except ValueError:
+        return 0.0
+    return bonuses.get(index, 0.0)
+
+
+def _select_candidate_by_family(
+    candidate_ranking: list[dict[str, Any]],
+    family: str | None,
+) -> dict[str, Any] | None:
+    normalized_family = _normalize_patch_synthesis_family(family)
+    for candidate in candidate_ranking:
+        if _normalize_patch_synthesis_family(candidate.get("patch_synthesis_type")) == normalized_family:
+            return candidate
+    return None
+
+
+def _apply_repair_family_policy(
+    *,
+    candidate_ranking: list[dict[str, Any]],
+    selected_candidate: dict[str, Any] | None,
+    metadata: dict[str, Any],
+) -> tuple[dict[str, Any] | None, str | None]:
+    if not candidate_ranking:
+        return selected_candidate, None
+    forced_family = _retry_target_family(metadata)
+    if forced_family:
+        forced_candidate = _select_candidate_by_family(candidate_ranking, forced_family)
+        if forced_candidate:
+            if selected_candidate and forced_candidate.get("candidate_id") == selected_candidate.get("candidate_id"):
+                return selected_candidate, None
+            return forced_candidate, "reflection_retry_family_switch"
+    rule_rank1_candidate = candidate_ranking[0]
+    if not selected_candidate:
+        return rule_rank1_candidate, "deterministic_rank1"
+    attempt_index = _retry_attempt_index(metadata)
+    selected_family = _normalize_patch_synthesis_family(selected_candidate.get("patch_synthesis_type"))
+    rank1_family = _normalize_patch_synthesis_family(rule_rank1_candidate.get("patch_synthesis_type"))
+    if attempt_index <= 1 and selected_family != rank1_family:
+        return rule_rank1_candidate, "llm_policy_corrected_crash_family_priority"
+    return selected_candidate, None
+
+
 def _patch_prompt_template_id(synthesis_type: str) -> str:
     return {
         PATCH_SYNTHESIS_BOUNDS_CHECK: "blind_bounds_check_v1",
         PATCH_SYNTHESIS_NULL_CHECK: "blind_null_check_v1",
         PATCH_SYNTHESIS_FAILURE_PROPAGATION: "blind_failure_propagation_v1",
     }.get(synthesis_type, "blind_open_ended_v1")
+
+
+def _resolve_prompt_template_id(
+    synthesis_type: str,
+    metadata: dict[str, Any],
+) -> str:
+    forced_template = str(metadata.get("PATCH_RETRY_TEMPLATE_ID") or metadata.get("patch_retry_template_id") or "").strip()
+    if forced_template:
+        return forced_template
+    base = _patch_prompt_template_id(synthesis_type)
+    attempt_index = _retry_attempt_index(metadata)
+    context_source = _retry_context_source(metadata)
+    failure_reason = _retry_failure_reason(metadata)
+    if attempt_index <= 1 and context_source == PATCH_CONTEXT_SOURCE_ROOT_CAUSE and not failure_reason:
+        return base
+    suffix_parts = [
+        _context_source_short_name(context_source),
+        failure_reason or "retry",
+        f"attempt{attempt_index}",
+    ]
+    return f"{base}__{'__'.join(suffix_parts)}"
+
+
+def _patch_prompt_retry_guidance(metadata: dict[str, Any]) -> str:
+    attempt_index = _retry_attempt_index(metadata)
+    context_source = _retry_context_source(metadata)
+    failure_reason = _retry_failure_reason(metadata)
+    target_family = _retry_target_family(metadata)
+    if attempt_index <= 1 and context_source == PATCH_CONTEXT_SOURCE_ROOT_CAUSE and not failure_reason and not target_family:
+        return ""
+    guidance: list[str] = [f"Reflection attempt {attempt_index} is active."]
+    if target_family:
+        guidance.append(f"Materialize the {target_family} repair family explicitly; do not drift back to a previously failed family.")
+    if failure_reason in {"llm_fail", "diff_not_materialized"}:
+        guidance.append("The previous attempt failed before producing a usable diff; do not repeat the same family/template/context combination.")
+    elif failure_reason == "build_fail":
+        guidance.append("The previous attempt produced a diff but did not build; preserve the semantic family while repairing the concrete compiler/build issue.")
+    elif failure_reason == "qe_fail":
+        guidance.append("The previous attempt reached QE but still failed the vulnerability/regression gate; change the semantic approach rather than repeating the same patch shape.")
+    if context_source == PATCH_CONTEXT_SOURCE_TRACE_EXPANDED:
+        guidance.append("Use the expanded trace and related-function context provided in supplemental_context.")
+    elif context_source == PATCH_CONTEXT_SOURCE_CALL_GRAPH:
+        guidance.append("Use the widest caller/callee context and the previous failure summary before selecting the edit site.")
+    return " ".join(guidance)
 
 
 def _patch_system_prompt(synthesis_type: str) -> str:
@@ -1309,6 +1608,10 @@ def _rank_patch_candidates(*, vuln_id: str, metadata: dict[str, Any], runtime: d
             ),
         ]
     ).lower()
+    family_priority, family_priority_reason = _repair_family_priority_from_crash(
+        traced_crash=traced_crash,
+        evidence_blob=evidence_blob,
+    )
 
     def _has_any(*tokens: str) -> bool:
         return any(token in evidence_blob for token in tokens)
@@ -1433,16 +1736,24 @@ def _rank_patch_candidates(*, vuln_id: str, metadata: dict[str, Any], runtime: d
             invariants=vulnerable_invariants,
         )
         invariant_bonus = round(invariant_alignment_score * 0.08, 4)
-        effective_score = base_score + gt_bonus + invariant_bonus
+        family_bonus = _family_priority_bonus(
+            str(candidate.get("patch_synthesis_type") or ""),
+            family_priority,
+        )
+        effective_score = base_score + gt_bonus + invariant_bonus + family_bonus
         ranked_candidates.append(
             {
                 **candidate,
                 "sort_weight_gt_bonus": gt_bonus,
                 "sort_weight_invariant_bonus": invariant_bonus,
+                "sort_weight_family_bonus": family_bonus,
                 "sort_weight_effective_score": effective_score,
                 "patch_ground_truth_mode": patch_ground_truth_mode,
                 "vulnerable_invariant_alignment": aligned_invariants,
                 "vulnerable_invariant_alignment_score": invariant_alignment_score,
+                "repair_family_priority": family_priority,
+                "repair_family_priority_reason": family_priority_reason,
+                "observed_crash_type": traced_crash.get("crash_type") or traced_crash.get("crash_state"),
                 "prompt_template_id": candidate.get("prompt_template_id"),
             }
         )
@@ -1454,6 +1765,7 @@ def _rank_patch_candidates(*, vuln_id: str, metadata: dict[str, Any], runtime: d
                 "patch_synthesis_type": candidate.get("patch_synthesis_type"),
                 "aligned_invariants": aligned_invariants,
                 "alignment_score": invariant_alignment_score,
+                "family_priority_bonus": family_bonus,
                 "effective_score": round(effective_score, 4),
             }
         )
@@ -1488,14 +1800,29 @@ def _build_patch_llm_messages(
     candidate_ranking: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     root_cause = _load_json(patch_root_cause_manifest_path(task_id))
-    context_manifest = _load_json(patch_context_manifest_path(task_id))
-    selected_context = context_manifest.get("selected_context") or {}
+    context_bundle = _context_bundle(task_id, metadata, runtime)
+    selected_context = context_bundle.get("selected_context") or {}
     trace_alignment = _load_json(patch_root_cause_alignment_manifest_path(task_id)).get("alignment") or {}
     invariant_payload = _load_json(task_root(task_id) / "patch" / "vulnerable_invariant_alignment_report.json")
     invariant_report = _load_invariant_report(task_id)
+    traced_crash = _load_traced_crash(runtime)
+    repair_family_priority = [
+        family
+        for family in (
+            (candidate_ranking[0] or {}).get("repair_family_priority")
+            if candidate_ranking
+            else []
+        )
+        if family
+    ]
     prompt_payload = {
         "task_id": task_id,
         "patch_target_vuln_id": vuln_id,
+        "observed_crash_type": traced_crash.get("crash_type") or traced_crash.get("crash_state"),
+        "repair_family_priority": repair_family_priority,
+        "repair_family_priority_reason": (candidate_ranking[0] or {}).get("repair_family_priority_reason") if candidate_ranking else None,
+        "retry_target_family": _retry_target_family(metadata),
+        "attempted_context_source": context_bundle.get("context_source"),
         "selected_target_function": runtime.get("selected_target_function"),
         "trace_root_cause": {
             "selected_trace_function": trace_alignment.get("selected_trace_function"),
@@ -1515,6 +1842,7 @@ def _build_patch_llm_messages(
             "line_end": selected_context.get("line_end"),
             "snippet": selected_context.get("snippet"),
         },
+        "supplemental_context": context_bundle.get("supplemental_context"),
         "candidate_ranking": [
             {
                 "candidate_id": candidate.get("candidate_id"),
@@ -1550,8 +1878,11 @@ def _build_patch_llm_messages(
                         "You are selecting the best semantic patch proposal for a confirmed vulnerability. "
                         "Return strict JSON only. Prefer the most generalizable candidate aligned to the trace/root-cause frame. "
                         "Prefer one of the generic blind repair families (bounds_check, null_check, failure_propagation) "
-                        "when the crash evidence supports it. "
+                        "when the crash evidence supports it. Treat repair_family_priority[0] as the default family unless "
+                        "previous_failed_attempt shows that family already failed for this task. "
                         "Rank candidates by trace, context, and invariant evidence only. "
+                        + _patch_prompt_retry_guidance(metadata)
+                        + " "
                         "Do not mention markdown fences."
                     ),
                 }
@@ -1588,8 +1919,8 @@ def _build_candidate_specific_materialization_messages(
     previous_llm_payload: dict[str, Any] | None,
 ) -> list[dict[str, Any]]:
     root_cause = _load_json(patch_root_cause_manifest_path(task_id))
-    context_manifest = _load_json(patch_context_manifest_path(task_id))
-    selected_context = context_manifest.get("selected_context") or {}
+    context_bundle = _context_bundle(task_id, metadata, runtime)
+    selected_context = context_bundle.get("selected_context") or {}
     trace_alignment = _load_json(patch_root_cause_alignment_manifest_path(task_id)).get("alignment") or {}
     invariant_report = _load_invariant_report(task_id)
     patch_synthesis_type = str(selected_candidate.get("patch_synthesis_type") or PATCH_SYNTHESIS_LLM_OPEN_ENDED)
@@ -1627,6 +1958,8 @@ def _build_candidate_specific_materialization_messages(
             "line_end": selected_context.get("line_end"),
             "snippet": selected_context.get("snippet"),
         },
+        "attempted_context_source": context_bundle.get("context_source"),
+        "supplemental_context": context_bundle.get("supplemental_context"),
         "primary_invariant": invariant_report.get("primary_invariant"),
         "vulnerable_invariants": invariant_report.get("invariants"),
         "previous_failed_attempt": metadata.get("patch_retry_context"),
@@ -1645,6 +1978,8 @@ def _build_candidate_specific_materialization_messages(
                         + "The diff MUST use paths relative to the source root. "
                         + "Do NOT use absolute paths or add extra directory prefixes like 'src/'. "
                         + "Use a simple relative path such as 'foo.c', not 'src/foo.c' or '/abs/path/foo.c'. "
+                        + _patch_prompt_retry_guidance(metadata)
+                        + " "
                         + "If you cannot generate a valid patch from the given context, return an empty "
                         + "string for proposed_patch_diff."
                     ),
@@ -2069,6 +2404,15 @@ def write_patch_creation(
                     llm_patch_payload["policy_correction"] = correction_reason
                     llm_patch_payload["original_selected_candidate_id"] = llm_selected_candidate.get("candidate_id")
                     llm_patch_payload["policy_selected_candidate_id"] = selected_candidate.get("candidate_id")
+                selected_candidate, family_policy_reason = _apply_repair_family_policy(
+                    candidate_ranking=candidate_ranking,
+                    selected_candidate=selected_candidate,
+                    metadata=metadata,
+                )
+                if family_policy_reason and selected_candidate:
+                    llm_selection_source = family_policy_reason
+                    llm_patch_payload["policy_correction"] = family_policy_reason
+                    llm_patch_payload["policy_selected_candidate_id"] = selected_candidate.get("candidate_id")
             else:
                 llm_selection_source = "deterministic_fallback_unknown_candidate"
         except (LLMCallError, RuntimeError, json.JSONDecodeError) as exc:
@@ -2082,6 +2426,17 @@ def write_patch_creation(
                 )
             llm_patch_payload = {"error": str(exc)}
             llm_selection_source = "deterministic_fallback_llm_failure"
+    selected_candidate, family_policy_reason = _apply_repair_family_policy(
+        candidate_ranking=candidate_ranking,
+        selected_candidate=selected_candidate,
+        metadata=metadata,
+    )
+    if family_policy_reason and selected_candidate:
+        llm_selection_source = family_policy_reason
+        if llm_patch_payload is None:
+            llm_patch_payload = {}
+        llm_patch_payload["policy_correction"] = family_policy_reason
+        llm_patch_payload["policy_selected_candidate_id"] = selected_candidate.get("candidate_id")
     llm_selection_confidence = _normalize_optional_confidence(
         llm_patch_payload.get("confidence") if isinstance(llm_patch_payload, dict) else None
     )
@@ -2148,7 +2503,7 @@ def write_patch_creation(
     strategy = str(selected_candidate.get("strategy") or metadata.get("patch_creation_strategy", "root_cause_direct_repair"))
     patch_synthesis_type = str(selected_candidate.get("patch_synthesis_type") or PATCH_SYNTHESIS_LLM_OPEN_ENDED)
     patch_synthesis_reason = str(selected_candidate.get("patch_synthesis_reason") or "candidate_selection_default")
-    prompt_template_id = str(selected_candidate.get("prompt_template_id") or _patch_prompt_template_id(patch_synthesis_type))
+    prompt_template_id = _resolve_prompt_template_id(patch_synthesis_type, metadata)
     known_fix_path_reached = _known_fix_path_reached(
         patch_ground_truth_mode=patch_ground_truth_mode,
         strategy=strategy,
@@ -2211,6 +2566,10 @@ def write_patch_creation(
         selection_source=llm_selection_source,
         llm_selected_candidate=llm_selected_candidate,
     )
+    attempted_repair_family = _normalize_patch_synthesis_family(patch_synthesis_type)
+    attempted_context_source = _retry_context_source(metadata)
+    observed_crash_type = (selected_candidate or {}).get("observed_crash_type")
+    repair_family_priority = list((selected_candidate or {}).get("repair_family_priority") or [])
     _write(patch_freeform_materialization_manifest_path(task_id), freeform_manifest)
     diff_path = task_root(task_id) / "patch" / "candidate.diff"
     if patch_result is None:
@@ -2222,6 +2581,9 @@ def write_patch_creation(
         "generated_at": now,
         "patch_target_vuln_id": vuln_id,
         "patch_ground_truth_mode": patch_ground_truth_mode,
+        "observed_crash_type": observed_crash_type,
+        "repair_family_priority": repair_family_priority,
+        "repair_family_priority_reason": (selected_candidate or {}).get("repair_family_priority_reason"),
         "patch_synthesis_type": patch_synthesis_type,
         "patch_synthesis_reason": patch_synthesis_reason,
         "prompt_template_id": prompt_template_id,
@@ -2444,6 +2806,8 @@ def write_patch_creation(
             "patch_target_vuln_id": vuln_id,
             "strategy": strategy,
             "selected_candidate": selected_candidate,
+            "attempted_repair_family": attempted_repair_family,
+            "attempted_context_source": attempted_context_source,
             "worktree_source_root": str(patched_source_root),
             "modified_file": None,
             "diff_path": str(diff_path),
@@ -2461,6 +2825,8 @@ def write_patch_creation(
             "patch_freeform_materialization_manifest_path": str(patch_freeform_materialization_manifest_path(task_id)),
             "patch_llm_vs_template_comparison_path": str(patch_llm_vs_template_comparison_path(task_id)),
             "patch_ground_truth_mode": patch_ground_truth_mode,
+            "observed_crash_type": observed_crash_type,
+            "repair_family_priority": repair_family_priority,
             "patch_synthesis_type": patch_synthesis_type,
             "patch_synthesis_reason": patch_synthesis_reason,
             "prompt_template_id": prompt_template_id,
@@ -2507,6 +2873,8 @@ def write_patch_creation(
         "patch_target_vuln_id": vuln_id,
         "strategy": patch_result["strategy"],
         "selected_candidate": selected_candidate,
+        "attempted_repair_family": attempted_repair_family,
+        "attempted_context_source": attempted_context_source,
         "worktree_source_root": str(patched_source_root),
         "modified_file": patch_result["modified_file"],
         "diff_path": str(diff_path),
@@ -2522,6 +2890,8 @@ def write_patch_creation(
         "patch_freeform_materialization_manifest_path": str(patch_freeform_materialization_manifest_path(task_id)),
         "patch_llm_vs_template_comparison_path": str(patch_llm_vs_template_comparison_path(task_id)),
         "patch_ground_truth_mode": patch_ground_truth_mode,
+        "observed_crash_type": observed_crash_type,
+        "repair_family_priority": repair_family_priority,
         "patch_synthesis_type": patch_synthesis_type,
         "patch_synthesis_reason": patch_synthesis_reason,
         "prompt_template_id": prompt_template_id,
@@ -3038,6 +3408,169 @@ def write_qe(
     return _write(patch_qe_manifest_path(task_id), payload), verdict
 
 
+def _classify_attempt_failure(
+    *,
+    creation_payload: dict[str, Any] | None,
+    build_payload: dict[str, Any] | None,
+    qe_payload: dict[str, Any] | None,
+    qe_verdict: str,
+) -> tuple[str, str]:
+    creation_payload = creation_payload or {}
+    build_payload = build_payload or {}
+    qe_payload = qe_payload or {}
+    materialization_mode = str(creation_payload.get("patch_materialization_mode") or "")
+    creation_failure = str(creation_payload.get("failure_reason") or "")
+    if materialization_mode == "blind_llm_patch_generation_failed" or creation_failure in {
+        "generic_llm_synthesis_failed",
+        "llm_disabled_no_generic_fallback",
+    }:
+        return "diff_not_materialized", creation_failure or materialization_mode or "blind patch synthesis failed before producing a usable diff"
+    llm_failure_reason = str(creation_payload.get("llm_failure_reason") or "")
+    if llm_failure_reason and llm_failure_reason not in {
+        "patch proposal did not attempt a real LLM call",
+        "llm_reflection_not_attempted",
+    }:
+        return "llm_fail", llm_failure_reason
+    if qe_verdict == "build_failed":
+        return "build_fail", str(qe_payload.get("reason") or build_payload.get("error") or "patch build failed")
+    if qe_verdict in {"pov_failed", "regression_failed"}:
+        return "qe_fail", str(qe_payload.get("reason") or qe_verdict)
+    return str(qe_verdict or "unknown"), str(qe_payload.get("reason") or qe_verdict or "unknown")
+
+
+def _current_attempt_summary(
+    *,
+    task_id: str,
+    metadata: dict[str, Any],
+    runtime: dict[str, Any],
+    creation_payload: dict[str, Any] | None,
+    build_payload: dict[str, Any] | None,
+    qe_payload: dict[str, Any] | None,
+    qe_verdict: str,
+    attempt_history: list[dict[str, Any]] | None,
+) -> dict[str, Any]:
+    creation_payload = creation_payload or {}
+    traced_crash = _load_traced_crash(runtime)
+    observed_crash_type = (
+        creation_payload.get("observed_crash_type")
+        or traced_crash.get("crash_type")
+        or traced_crash.get("crash_state")
+    )
+    repair_family_priority = list(creation_payload.get("repair_family_priority") or [])
+    if not repair_family_priority:
+        evidence_blob = " ".join(
+            [
+                str(observed_crash_type or ""),
+                str(traced_crash.get("stderr_excerpt") or ""),
+                str((creation_payload.get("selected_candidate") or {}).get("selection_reason") or ""),
+            ]
+        ).lower()
+        repair_family_priority, _ = _repair_family_priority_from_crash(
+            traced_crash=traced_crash,
+            evidence_blob=evidence_blob,
+        )
+    failure_reason, failure_detail = _classify_attempt_failure(
+        creation_payload=creation_payload,
+        build_payload=build_payload,
+        qe_payload=qe_payload,
+        qe_verdict=qe_verdict,
+    )
+    return {
+        "task_id": task_id,
+        "attempt_index": len(attempt_history or []) + 1,
+        "attempted_repair_family": _normalize_patch_synthesis_family(
+            creation_payload.get("attempted_repair_family") or creation_payload.get("patch_synthesis_type")
+        ),
+        "attempted_context_source": str(
+            creation_payload.get("attempted_context_source")
+            or _retry_context_source(metadata)
+        ),
+        "prompt_template_id": creation_payload.get("prompt_template_id"),
+        "strategy_family": (creation_payload.get("selected_candidate") or {}).get("strategy_family"),
+        "selected_candidate_id": (creation_payload.get("selected_candidate") or {}).get("candidate_id"),
+        "failure_reason": failure_reason,
+        "failure_detail": failure_detail,
+        "observed_crash_type": observed_crash_type,
+        "repair_family_priority": repair_family_priority,
+    }
+
+
+def _next_untried_family(
+    family_priority: list[str],
+    tried_families: list[str],
+) -> str:
+    normalized_tried = [_normalize_patch_synthesis_family(item) for item in tried_families if item]
+    for family in family_priority:
+        normalized = _normalize_patch_synthesis_family(family)
+        if normalized not in normalized_tried:
+            return normalized
+    for family in (
+        PATCH_SYNTHESIS_BOUNDS_CHECK,
+        PATCH_SYNTHESIS_NULL_CHECK,
+        PATCH_SYNTHESIS_FAILURE_PROPAGATION,
+    ):
+        if family not in normalized_tried:
+            return family
+    return family_priority[0] if family_priority else PATCH_SYNTHESIS_BOUNDS_CHECK
+
+
+def _reflection_next_attempt_plan(
+    *,
+    current_attempt: dict[str, Any],
+    attempt_history: list[dict[str, Any]] | None,
+) -> dict[str, Any]:
+    history = list(attempt_history or [])
+    tried_families = [
+        str(item.get("attempted_repair_family") or "")
+        for item in history
+    ] + [str(current_attempt.get("attempted_repair_family") or "")]
+    family_priority = list(current_attempt.get("repair_family_priority") or [])
+    current_family = _normalize_patch_synthesis_family(current_attempt.get("attempted_repair_family"))
+    failure_reason = str(current_attempt.get("failure_reason") or "")
+    attempt_index = int(current_attempt.get("attempt_index") or 1)
+    next_context_source = PATCH_CONTEXT_SOURCE_ROOT_CAUSE
+    if failure_reason in {"llm_fail", "diff_not_materialized"}:
+        if attempt_index == 1:
+            next_family = _next_untried_family(family_priority, [current_family])
+            next_context_source = PATCH_CONTEXT_SOURCE_TRACE_EXPANDED
+        else:
+            next_family = _next_untried_family(family_priority, tried_families)
+            next_context_source = PATCH_CONTEXT_SOURCE_CALL_GRAPH
+    elif failure_reason == "build_fail":
+        next_family = current_family
+        next_context_source = (
+            PATCH_CONTEXT_SOURCE_TRACE_EXPANDED
+            if attempt_index == 1
+            else PATCH_CONTEXT_SOURCE_CALL_GRAPH
+        )
+    else:
+        next_family = _next_untried_family(family_priority, tried_families)
+        next_context_source = (
+            PATCH_CONTEXT_SOURCE_CALL_GRAPH
+            if attempt_index >= 2
+            else PATCH_CONTEXT_SOURCE_TRACE_EXPANDED
+        )
+    next_prompt_template_id = _resolve_prompt_template_id(
+        next_family,
+        {
+            "PATCH_RETRY_ATTEMPT_INDEX": attempt_index + 1,
+            "PATCH_RETRY_CONTEXT_SOURCE": next_context_source,
+            "PATCH_RETRY_FAILURE_REASON": failure_reason,
+        },
+    )
+    switch_reason = (
+        f"{failure_reason}: switching from {current_family} to {next_family} using {next_context_source}"
+        if next_family != current_family
+        else f"{failure_reason}: keeping {current_family} but widening context to {next_context_source}"
+    )
+    return {
+        "next_repair_family": next_family,
+        "next_context_source": next_context_source,
+        "next_prompt_template_id": next_prompt_template_id,
+        "switch_reason": switch_reason,
+    }
+
+
 def write_reflection(
     task_id: str,
     *,
@@ -3051,6 +3584,22 @@ def write_reflection(
     qe_payload: dict[str, Any] | None = None,
     attempt_history: list[dict[str, Any]] | None = None,
 ) -> tuple[Path, str]:
+    metadata = metadata or {}
+    runtime = runtime or {}
+    current_attempt = _current_attempt_summary(
+        task_id=task_id,
+        metadata=metadata,
+        runtime=runtime,
+        creation_payload=creation_payload,
+        build_payload=build_payload,
+        qe_payload=qe_payload,
+        qe_verdict=qe_verdict,
+        attempt_history=attempt_history,
+    )
+    next_plan = _reflection_next_attempt_plan(
+        current_attempt=current_attempt,
+        attempt_history=attempt_history,
+    )
     default_decision = _default_reflection_decision(
         qe_verdict=qe_verdict,
         priority_action=priority_action,
@@ -3070,6 +3619,8 @@ def write_reflection(
                     task_id=task_id,
                     qe_verdict=qe_verdict,
                     priority_action=priority_action,
+                    metadata=metadata,
+                    runtime=runtime,
                     creation_payload=creation_payload,
                     build_payload=build_payload,
                     qe_payload=qe_payload,
@@ -3129,11 +3680,22 @@ def write_reflection(
         "generated_at": now,
         "stage": "Reflection",
         "qe_verdict": qe_verdict,
+        "attempted_repair_family": current_attempt.get("attempted_repair_family"),
+        "attempted_context_source": current_attempt.get("attempted_context_source"),
+        "attempted_prompt_template_id": current_attempt.get("prompt_template_id"),
+        "failure_reason": current_attempt.get("failure_reason"),
+        "failure_detail": current_attempt.get("failure_detail"),
+        "observed_crash_type": current_attempt.get("observed_crash_type"),
+        "repair_family_priority": current_attempt.get("repair_family_priority"),
         "reflection_action": action,
         "reason": reflection_payload.get("reason"),
         "primary_blocker": reflection_payload.get("primary_blocker"),
         "invariant_family": reflection_payload.get("invariant_family"),
         "next_strategy": reflection_payload.get("next_strategy"),
+        "next_repair_family": next_plan.get("next_repair_family"),
+        "next_context_source": next_plan.get("next_context_source"),
+        "next_prompt_template_id": next_plan.get("next_prompt_template_id"),
+        "switch_reason": next_plan.get("switch_reason"),
         "root_cause_alignment_score": reflection_payload.get("root_cause_alignment_score"),
         "attempt_history_count": len(attempt_history or []),
         "llm_reflection_payload": reflection_payload.get("llm_reflection_payload"),

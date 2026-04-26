@@ -111,6 +111,10 @@ def _patch_creation_runtime_fields(creation_payload: dict[str, object]) -> dict[
         "patch_llm_real_call_verified": creation_payload.get("patch_llm_real_call_verified"),
         "patch_semantic_strength": creation_payload.get("patch_semantic_strength"),
         "patch_ground_truth_mode": creation_payload.get("patch_ground_truth_mode"),
+        "attempted_repair_family": creation_payload.get("attempted_repair_family"),
+        "attempted_context_source": creation_payload.get("attempted_context_source"),
+        "observed_crash_type": creation_payload.get("observed_crash_type"),
+        "repair_family_priority": creation_payload.get("repair_family_priority"),
         "patch_synthesis_type": creation_payload.get("patch_synthesis_type"),
         "patch_synthesis_reason": creation_payload.get("patch_synthesis_reason"),
         "prompt_template_id": creation_payload.get("prompt_template_id"),
@@ -183,6 +187,8 @@ def _retry_context(
     qe_payload: dict[str, object],
     qe_verdict: str,
     retry_strategy: dict[str, str],
+    previous_attempt: dict[str, object] | None,
+    reflection_payload: dict[str, object],
 ) -> dict[str, object]:
     return {
         "retry_strategy": retry_strategy.get("name"),
@@ -194,12 +200,106 @@ def _retry_context(
         "previous_build_error": build_payload.get("error"),
         "previous_qe_verdict": qe_verdict,
         "previous_qe_reason": qe_payload.get("reason"),
+        "previous_attempted_repair_family": (previous_attempt or {}).get("attempted_repair_family"),
+        "previous_attempted_context_source": (previous_attempt or {}).get("attempted_context_source"),
+        "previous_prompt_template_id": (previous_attempt or {}).get("prompt_template_id"),
+        "previous_failure_reason": (previous_attempt or {}).get("failure_reason"),
+        "previous_failure_detail": (previous_attempt or {}).get("failure_detail"),
+        "next_repair_family": reflection_payload.get("next_repair_family"),
+        "next_context_source": reflection_payload.get("next_context_source"),
+        "next_prompt_template_id": reflection_payload.get("next_prompt_template_id"),
+        "switch_reason": reflection_payload.get("switch_reason"),
         "repair_instruction": (
             "Generate a corrected freeform unified diff. If the previous patch compiled incorrectly, fix the concrete syntax/build error first, "
             "then keep the root-cause semantic guard. Avoid partial uncommenting, stale commented braces, duplicate blocks, or truncated hunks. "
             + retry_strategy.get("instruction", "")
         ),
     }
+
+
+def _attempt_record(
+    *,
+    attempt_index: int,
+    strategy: str,
+    snapshots: dict[str, str],
+    creation_path: Path,
+    apply_path: Path,
+    build_path: Path,
+    qe_path: Path,
+    reflection_path: Path,
+    creation_payload: dict[str, object],
+    apply_payload: dict[str, object],
+    build_payload: dict[str, object],
+    qe_payload: dict[str, object],
+    qe_verdict: str,
+    action: str,
+    reflection_payload: dict[str, object],
+    retry_context: dict[str, object] | None = None,
+) -> dict[str, object]:
+    return {
+        "attempt_index": attempt_index,
+        "strategy": strategy,
+        "snapshots": snapshots,
+        "retry_context": retry_context,
+        "creation_manifest_path": str(creation_path),
+        "apply_manifest_path": str(apply_path),
+        "build_manifest_path": str(build_path),
+        "qe_manifest_path": str(qe_path),
+        "reflection_manifest_path": str(reflection_path),
+        "qe_verdict": qe_verdict,
+        "action": action,
+        "materialization_mode": creation_payload.get("patch_materialization_mode"),
+        "llm_real_call_verified": creation_payload.get("patch_llm_real_call_verified"),
+        "result_classification": qe_payload.get(
+            "patch_result_classification",
+            build_payload.get("patch_result_classification", apply_payload.get("patch_result_classification")),
+        ),
+        "attempted_repair_family": creation_payload.get("attempted_repair_family"),
+        "attempted_context_source": creation_payload.get("attempted_context_source"),
+        "prompt_template_id": creation_payload.get("prompt_template_id"),
+        "failure_reason": reflection_payload.get("failure_reason"),
+        "failure_detail": reflection_payload.get("failure_detail"),
+        "applied_switch_reason": (retry_context or {}).get("switch_reason"),
+        "switch_reason": reflection_payload.get("switch_reason"),
+        "next_repair_family": reflection_payload.get("next_repair_family"),
+        "next_context_source": reflection_payload.get("next_context_source"),
+        "next_prompt_template_id": reflection_payload.get("next_prompt_template_id"),
+        "observed_crash_type": creation_payload.get("observed_crash_type"),
+    }
+
+
+def _write_reflection_diff_artifact(
+    *,
+    task_store: TaskStateStore,
+    task_id: str,
+    attempts: list[dict[str, object]],
+) -> Path:
+    task_dir = Path(task_store.load_task(task_id).task_dir)
+    patch_dir = task_dir / "patch"
+    transitions: list[dict[str, object]] = []
+    for previous, current in zip(attempts, attempts[1:]):
+        transitions.append(
+            {
+                "from_attempt": previous.get("attempt_index"),
+                "to_attempt": current.get("attempt_index"),
+                "from_family": previous.get("attempted_repair_family"),
+                "to_family": current.get("attempted_repair_family"),
+                "from_context_source": previous.get("attempted_context_source"),
+                "to_context_source": current.get("attempted_context_source"),
+                "from_template_id": previous.get("prompt_template_id"),
+                "to_template_id": current.get("prompt_template_id"),
+                "switch_reason": current.get("applied_switch_reason") or current.get("switch_reason"),
+            }
+        )
+    payload = {
+        "task_id": task_id,
+        "generated_at": task_store.now(),
+        "transition_count": len(transitions),
+        "transitions": transitions,
+    }
+    path = patch_dir / "reflection_diff_artifact.json"
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return path
 
 
 def _load_optional_json(path: Path) -> dict[str, object]:
@@ -266,7 +366,11 @@ def _write_patch_search_reports(
             {
                 "attempt_index": item.get("attempt_index"),
                 "strategy": item.get("strategy"),
+                "attempted_repair_family": item.get("attempted_repair_family"),
+                "attempted_context_source": item.get("attempted_context_source"),
+                "prompt_template_id": item.get("prompt_template_id"),
                 "qe_verdict": item.get("qe_verdict"),
+                "failure_reason": item.get("failure_reason"),
                 "action": item.get("action"),
                 "materialization_mode": item.get("materialization_mode"),
                 "result_classification": item.get("result_classification"),
@@ -423,8 +527,10 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
         qe_payload=qe_payload,
         attempt_history=[],
     )
+    reflection_payload = json.loads(Path(reflection_path).read_text(encoding="utf-8"))
     retry_manifest_payload: dict[str, object] | None = None
     multi_strategy_manifest_payload: dict[str, object] | None = None
+    reflection_diff_artifact_path: Path | None = None
     retry_enabled = bool(task.metadata.get("PATCH_ENABLE_REFLECTION_RETRY", True))
     max_repair_attempts = int(task.metadata.get("PATCH_MAX_REPAIR_ATTEMPTS", len(PATCH_RETRY_STRATEGIES) + 1))
     retryable_qe_verdicts = {"build_failed", "pov_failed", "regression_failed"}
@@ -437,24 +543,23 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
     )
     if retry_worthwhile:
         attempts: list[dict[str, object]] = [
-            {
-                "attempt_index": 1,
-                "strategy": "initial_freeform",
-                "snapshots": _snapshot_patch_attempt(task_store, task_id, 1),
-                "creation_manifest_path": str(creation_path),
-                "apply_manifest_path": str(apply_path),
-                "build_manifest_path": str(build_path),
-                "qe_manifest_path": str(qe_path),
-                "reflection_manifest_path": str(reflection_path),
-                "qe_verdict": qe_verdict,
-                "action": action,
-                "materialization_mode": creation_payload.get("patch_materialization_mode"),
-                "llm_real_call_verified": creation_payload.get("patch_llm_real_call_verified"),
-                "result_classification": qe_payload.get(
-                    "patch_result_classification",
-                    build_payload.get("patch_result_classification", apply_payload.get("patch_result_classification")),
-                ),
-            }
+            _attempt_record(
+                attempt_index=1,
+                strategy="initial_freeform",
+                snapshots=_snapshot_patch_attempt(task_store, task_id, 1),
+                creation_path=Path(creation_path),
+                apply_path=Path(apply_path),
+                build_path=Path(build_path),
+                qe_path=Path(qe_path),
+                reflection_path=Path(reflection_path),
+                creation_payload=creation_payload,
+                apply_payload=apply_payload,
+                build_payload=build_payload,
+                qe_payload=qe_payload,
+                qe_verdict=qe_verdict,
+                action=action,
+                reflection_payload=reflection_payload,
+            )
         ]
         attempt_index = 1
         while (
@@ -465,16 +570,23 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
             and attempt_index <= len(PATCH_RETRY_STRATEGIES)
         ):
             strategy = PATCH_RETRY_STRATEGIES[attempt_index - 1]
+            previous_attempt = attempts[-1]
             retry_metadata = {
                 **task.metadata,
                 "PATCH_RETRY_ATTEMPT_INDEX": attempt_index + 1,
-                "PATCH_RETRY_STRATEGY_FAMILY": strategy["name"],
+                "PATCH_RETRY_STRATEGY_FAMILY": reflection_payload.get("next_strategy") or strategy["name"],
+                "PATCH_RETRY_TARGET_FAMILY": reflection_payload.get("next_repair_family"),
+                "PATCH_RETRY_CONTEXT_SOURCE": reflection_payload.get("next_context_source"),
+                "PATCH_RETRY_TEMPLATE_ID": reflection_payload.get("next_prompt_template_id"),
+                "PATCH_RETRY_FAILURE_REASON": reflection_payload.get("failure_reason"),
                 "patch_retry_context": _retry_context(
                     creation_payload=creation_payload,
                     build_payload=build_payload,
                     qe_payload=qe_payload,
                     qe_verdict=qe_verdict,
                     retry_strategy=strategy,
+                    previous_attempt=previous_attempt,
+                    reflection_payload=reflection_payload,
                 ),
             }
             retry_creation_path, retry_creation_payload = write_patch_creation(
@@ -521,36 +633,39 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
                 qe_payload=retry_qe_payload,
                 attempt_history=attempts,
             )
+            retry_reflection_payload = json.loads(Path(retry_reflection_path).read_text(encoding="utf-8"))
             attempt_index += 1
             attempts.append(
-                {
-                    "attempt_index": attempt_index,
-                    "strategy": strategy["name"],
-                    "snapshots": _snapshot_patch_attempt(task_store, task_id, attempt_index),
-                    "retry_context": retry_metadata["patch_retry_context"],
-                    "creation_manifest_path": str(retry_creation_path),
-                    "apply_manifest_path": str(retry_apply_path),
-                    "build_manifest_path": str(retry_build_path),
-                    "qe_manifest_path": str(retry_qe_path),
-                    "reflection_manifest_path": str(retry_reflection_path),
-                    "qe_verdict": retry_qe_verdict,
-                    "action": retry_action,
-                    "materialization_mode": retry_creation_payload.get("patch_materialization_mode"),
-                    "llm_real_call_verified": retry_creation_payload.get("patch_llm_real_call_verified"),
-                    "result_classification": retry_qe_payload.get(
-                        "patch_result_classification",
-                        retry_build_payload.get(
-                            "patch_result_classification",
-                            retry_apply_payload.get("patch_result_classification"),
-                        ),
-                    ),
-                }
+                _attempt_record(
+                    attempt_index=attempt_index,
+                    strategy=strategy["name"],
+                    snapshots=_snapshot_patch_attempt(task_store, task_id, attempt_index),
+                    creation_path=Path(retry_creation_path),
+                    apply_path=Path(retry_apply_path),
+                    build_path=Path(retry_build_path),
+                    qe_path=Path(retry_qe_path),
+                    reflection_path=Path(retry_reflection_path),
+                    creation_payload=retry_creation_payload,
+                    apply_payload=retry_apply_payload,
+                    build_payload=retry_build_payload,
+                    qe_payload=retry_qe_payload,
+                    qe_verdict=retry_qe_verdict,
+                    action=retry_action,
+                    reflection_payload=retry_reflection_payload,
+                    retry_context=retry_metadata["patch_retry_context"],
+                )
+            )
+            reflection_diff_artifact_path = _write_reflection_diff_artifact(
+                task_store=task_store,
+                task_id=task_id,
+                attempts=attempts,
             )
             creation_path, creation_payload = retry_creation_path, retry_creation_payload
             apply_path, apply_payload = retry_apply_path, retry_apply_payload
             build_path, build_payload = retry_build_path, retry_build_payload
             qe_path, qe_verdict, qe_payload = retry_qe_path, retry_qe_verdict, retry_qe_payload
             reflection_path, action = retry_reflection_path, retry_action
+            reflection_payload = retry_reflection_payload
 
         retry_manifest_payload = {
             "task_id": task_id,
@@ -561,6 +676,7 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
             "attempt_count": len(attempts),
             "strategies_attempted": [item.get("strategy") for item in attempts],
             "attempts": attempts,
+            "reflection_diff_artifact_path": str(reflection_diff_artifact_path) if reflection_diff_artifact_path else None,
             "final_qe_verdict": qe_verdict,
             "final_action": action,
         }
@@ -593,6 +709,11 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
                 "qe_verdict": qe_verdict,
                 "action": action,
                 "materialization_mode": creation_payload.get("patch_materialization_mode"),
+                "attempted_repair_family": creation_payload.get("attempted_repair_family"),
+                "attempted_context_source": creation_payload.get("attempted_context_source"),
+                "prompt_template_id": creation_payload.get("prompt_template_id"),
+                "failure_reason": reflection_payload.get("failure_reason"),
+                "failure_detail": reflection_payload.get("failure_detail"),
                 "result_classification": qe_payload.get(
                     "patch_result_classification",
                     build_payload.get("patch_result_classification", apply_payload.get("patch_result_classification")),
@@ -633,6 +754,7 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
             if retry_manifest_payload
             else None,
             "patch_reflection_retry_attempted": bool(retry_manifest_payload),
+            "patch_reflection_diff_artifact_path": str(reflection_diff_artifact_path) if reflection_diff_artifact_path else None,
             "patch_multi_strategy_search_manifest_path": str(
                 Path(task_store.load_task(task_id).task_dir) / "patch" / "patch_multi_strategy_search_manifest.json"
             )
