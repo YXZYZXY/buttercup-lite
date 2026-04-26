@@ -135,6 +135,7 @@ def _snapshot_patch_attempt(task_store: TaskStateStore, task_id: str, attempt_in
         "patch_apply_manifest.json",
         "patch_build_manifest.json",
         "qe_manifest.json",
+        "qe_gate_summary.json",
         "reflection_manifest.json",
         "patch_freeform_materialization_manifest.json",
         "patch_llm_vs_template_comparison.json",
@@ -481,6 +482,7 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
         now=task_store.now(),
         metadata=task.metadata,
         runtime=task_store.load_task(task_id).runtime,
+        creation_payload=creation_payload,
         build_payload=build_payload,
     )
     qe_payload = json.loads(Path(qe_path).read_text(encoding="utf-8"))
@@ -503,6 +505,10 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
             "patch_apply_manifest_path": str(apply_path),
             "patch_build_manifest_path": str(build_path),
             "patch_qe_manifest_path": str(qe_path),
+            "patch_qe_gate_summary_path": qe_payload.get("qe_gate_summary_artifact_path"),
+            "patch_qe_gate_results": qe_payload.get("qe_gate_results"),
+            "patch_qe_final_verdict": qe_payload.get("final_verdict"),
+            "patch_qe_rejection_gate": qe_payload.get("rejection_gate"),
             "patch_semantic_validation_manifest_path": str(Path(task_store.load_task(task_id).task_dir) / "patch" / "patch_semantic_validation_manifest.json"),
             "patch_failure_analysis_path": str(Path(task_store.load_task(task_id).task_dir) / "patch" / "patch_failure_analysis.json"),
             "patch_qe_verdict": qe_verdict,
@@ -612,6 +618,7 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
                 now=task_store.now(),
                 metadata=retry_metadata,
                 runtime=task_store.load_task(task_id).runtime,
+                creation_payload=retry_creation_payload,
                 build_payload=retry_build_payload,
             )
             retry_qe_payload = json.loads(Path(retry_qe_path).read_text(encoding="utf-8"))
@@ -782,6 +789,10 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
             "patch_semantic_validation_manifest_path": str(Path(task_store.load_task(task_id).task_dir) / "patch" / "patch_semantic_validation_manifest.json"),
             "patch_failure_analysis_path": str(Path(task_store.load_task(task_id).task_dir) / "patch" / "patch_failure_analysis.json"),
             "patch_qe_supported_verdicts": qe_payload.get("supported_verdicts"),
+            "patch_qe_gate_summary_path": qe_payload.get("qe_gate_summary_artifact_path"),
+            "patch_qe_gate_results": qe_payload.get("qe_gate_results"),
+            "patch_qe_final_verdict": qe_payload.get("final_verdict"),
+            "patch_qe_rejection_gate": qe_payload.get("rejection_gate"),
             "patch_result_classification": qe_payload.get(
                 "patch_result_classification",
                 build_payload.get("patch_result_classification", apply_payload.get("patch_result_classification")),

@@ -60,6 +60,43 @@ PATCH_CONTEXT_SOURCE_CALL_GRAPH = "call_graph_expanded_context"
 
 NON_BLIND_PATCH_CHANNELS = {"offline_eval", "benchmark_fixture"}
 
+QE_GATE_APPLY = "apply"
+QE_GATE_BUILD = "build"
+QE_GATE_POV_REPLAY = "pov_replay"
+QE_GATE_REGRESSION = "regression"
+
+QE_GATE_RESULT_PASSED = "passed"
+QE_GATE_RESULT_FAILED = "failed"
+QE_GATE_RESULT_SKIPPED = "skipped"
+
+QE_SKIP_PREREQUISITE_FAILED = "PREREQUISITE_FAILED"
+QE_SKIP_NO_INPUT_AVAILABLE = "NO_INPUT_AVAILABLE"
+QE_SKIP_ENVIRONMENT_NOT_READY = "ENVIRONMENT_NOT_READY"
+QE_SKIP_EXPLICITLY_DISABLED = "EXPLICITLY_DISABLED"
+QE_SKIP_NO_REGRESSION_CORPUS = "NO_REGRESSION_CORPUS"
+
+QE_APPLY_DIFF_PARSE_FAILED = "DIFF_PARSE_FAILED"
+QE_APPLY_HUNK_MISMATCH = "HUNK_MISMATCH"
+QE_APPLY_FILE_NOT_FOUND = "FILE_NOT_FOUND"
+QE_APPLY_ERROR = "APPLY_ERROR"
+
+QE_BUILD_COMPILE_ERROR = "COMPILE_ERROR"
+QE_BUILD_LINK_ERROR = "LINK_ERROR"
+QE_BUILD_TIMEOUT = "TIMEOUT"
+QE_BUILD_OTHER = "OTHER"
+
+QE_POV_STILL_CRASHES = "POV_STILL_CRASHES"
+QE_POV_TIMEOUT = "POV_TIMEOUT"
+QE_POV_ENVIRONMENT_ERROR = "POV_ENVIRONMENT_ERROR"
+
+QE_REGRESSION_CRASH = "REGRESSION_CRASH"
+QE_REGRESSION_TIMEOUT = "REGRESSION_TIMEOUT"
+QE_REGRESSION_ENVIRONMENT_ERROR = "REGRESSION_ENVIRONMENT_ERROR"
+
+QE_FINAL_VERDICT_ACCEPTED = "PATCH_ACCEPTED"
+QE_FINAL_VERDICT_REJECTED = "PATCH_REJECTED"
+QE_FINAL_VERDICT_INCOMPLETE = "INCOMPLETE"
+
 
 def _write(path: Path, payload: dict[str, Any]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -222,13 +259,142 @@ def _context_source_short_name(context_source: str) -> str:
     }.get(context_source, "root")
 
 
+def _qe_gate_result(
+    gate: str,
+    *,
+    attempted: bool,
+    result: str,
+    skip_reason: str | None = None,
+    failure_reason: str | None = None,
+    failure_detail: str | None = None,
+    evidence: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "gate": gate,
+        "attempted": attempted,
+        "result": result,
+        "skip_reason": skip_reason,
+        "failure_reason": failure_reason,
+        "failure_detail": failure_detail,
+        "evidence": evidence or {},
+    }
+
+
+def _qe_gate_passed(result: dict[str, Any] | None) -> bool:
+    return bool(result and result.get("result") == QE_GATE_RESULT_PASSED)
+
+
+def _qe_apply_failure_reason(stdout: str, stderr: str) -> str:
+    combined = f"{stdout}\n{stderr}".lower()
+    if "malformed patch" in combined or "only garbage was found" in combined:
+        return QE_APPLY_DIFF_PARSE_FAILED
+    if "can't find file to patch" in combined or "no file to patch" in combined or "no such file" in combined:
+        return QE_APPLY_FILE_NOT_FOUND
+    if "hunk" in combined and "failed" in combined:
+        return QE_APPLY_HUNK_MISMATCH
+    return QE_APPLY_ERROR
+
+
+def _qe_build_failure_reason(detail: str) -> str:
+    normalized = str(detail or "").lower()
+    if "undefined reference" in normalized or "collect2:" in normalized or "ld:" in normalized or "linker" in normalized:
+        return QE_BUILD_LINK_ERROR
+    if "timeout" in normalized or "timed out" in normalized:
+        return QE_BUILD_TIMEOUT
+    if "error:" in normalized or "fatal error" in normalized or "compil" in normalized:
+        return QE_BUILD_COMPILE_ERROR
+    return QE_BUILD_OTHER
+
+
+def _qe_gate_summary_path(task_id: str) -> Path:
+    return task_root(task_id) / "patch" / "qe_gate_summary.json"
+
+
+def _build_synthetic_qe_gate_results(*, verdict: str, reason: str) -> dict[str, dict[str, Any]]:
+    apply_gate = _qe_gate_result(QE_GATE_APPLY, attempted=True, result=QE_GATE_RESULT_PASSED)
+    build_gate = _qe_gate_result(QE_GATE_BUILD, attempted=True, result=QE_GATE_RESULT_PASSED)
+    pov_gate = _qe_gate_result(
+        QE_GATE_POV_REPLAY,
+        attempted=verdict in {"pov_failed", "regression_failed", "approved"},
+        result=QE_GATE_RESULT_PASSED,
+    )
+    regression_gate = _qe_gate_result(
+        QE_GATE_REGRESSION,
+        attempted=verdict in {"regression_failed", "approved"},
+        result=QE_GATE_RESULT_PASSED,
+    )
+    if verdict == "build_failed":
+        build_gate = _qe_gate_result(
+            QE_GATE_BUILD,
+            attempted=True,
+            result=QE_GATE_RESULT_FAILED,
+            failure_reason=QE_BUILD_OTHER,
+            failure_detail=reason,
+        )
+        pov_gate = _qe_gate_result(
+            QE_GATE_POV_REPLAY,
+            attempted=False,
+            result=QE_GATE_RESULT_SKIPPED,
+            skip_reason=QE_SKIP_PREREQUISITE_FAILED,
+            failure_detail="build gate did not pass",
+        )
+        regression_gate = _qe_gate_result(
+            QE_GATE_REGRESSION,
+            attempted=False,
+            result=QE_GATE_RESULT_SKIPPED,
+            skip_reason=QE_SKIP_PREREQUISITE_FAILED,
+            failure_detail="pov replay gate did not pass",
+        )
+    elif verdict == "pov_failed":
+        pov_gate = _qe_gate_result(
+            QE_GATE_POV_REPLAY,
+            attempted=True,
+            result=QE_GATE_RESULT_FAILED,
+            failure_reason=QE_POV_STILL_CRASHES,
+            failure_detail=reason,
+        )
+        regression_gate = _qe_gate_result(
+            QE_GATE_REGRESSION,
+            attempted=False,
+            result=QE_GATE_RESULT_SKIPPED,
+            skip_reason=QE_SKIP_PREREQUISITE_FAILED,
+            failure_detail="pov replay gate did not pass",
+        )
+    elif verdict == "regression_failed":
+        regression_gate = _qe_gate_result(
+            QE_GATE_REGRESSION,
+            attempted=True,
+            result=QE_GATE_RESULT_FAILED,
+            failure_reason=QE_REGRESSION_CRASH,
+            failure_detail=reason,
+        )
+    return {
+        QE_GATE_APPLY: apply_gate,
+        QE_GATE_BUILD: build_gate,
+        QE_GATE_POV_REPLAY: pov_gate,
+        QE_GATE_REGRESSION: regression_gate,
+    }
+
+
 def _verifier_gates_passed(
     *,
     build_payload: dict[str, Any] | None = None,
     pov_replay: dict[str, Any] | None = None,
     regression_results: list[dict[str, Any]] | None = None,
     verdict: str | None = None,
+    qe_gate_results: dict[str, dict[str, Any]] | None = None,
 ) -> list[str]:
+    if qe_gate_results is not None:
+        return [
+            gate
+            for gate in (
+                QE_GATE_APPLY,
+                QE_GATE_BUILD,
+                QE_GATE_POV_REPLAY,
+                QE_GATE_REGRESSION,
+            )
+            if _qe_gate_passed(qe_gate_results.get(gate))
+        ]
     gates: list[str] = []
     build_succeeded = bool(build_payload and build_payload.get("status") == "build_succeeded")
     if build_succeeded:
@@ -1085,9 +1251,9 @@ def _patch_prompt_retry_guidance(metadata: dict[str, Any]) -> str:
         guidance.append(f"Materialize the {target_family} repair family explicitly; do not drift back to a previously failed family.")
     if failure_reason in {"llm_fail", "diff_not_materialized"}:
         guidance.append("The previous attempt failed before producing a usable diff; do not repeat the same family/template/context combination.")
-    elif failure_reason == "build_fail":
+    elif failure_reason in {"apply_gate", "build_gate", "build_fail"}:
         guidance.append("The previous attempt produced a diff but did not build; preserve the semantic family while repairing the concrete compiler/build issue.")
-    elif failure_reason == "qe_fail":
+    elif failure_reason in {"pov_replay_gate", "regression_gate", "qe_fail"}:
         guidance.append("The previous attempt reached QE but still failed the vulnerability/regression gate; change the semantic approach rather than repeating the same patch shape.")
     if context_source == PATCH_CONTEXT_SOURCE_TRACE_EXPANDED:
         guidance.append("Use the expanded trace and related-function context provided in supplemental_context.")
@@ -3152,12 +3318,454 @@ def _replay_input(binary_path: str, harness_name: str, testcase_path: str, cwd: 
     }
 
 
+def _run_apply_gate(
+    *,
+    task_id: str,
+    metadata: dict[str, Any],
+    runtime: dict[str, Any],
+    creation_payload: dict[str, Any] | None,
+) -> dict[str, Any]:
+    creation_payload = creation_payload or {}
+    if creation_payload.get("status") != "patch_created":
+        return _qe_gate_result(
+            QE_GATE_APPLY,
+            attempted=False,
+            result=QE_GATE_RESULT_SKIPPED,
+            skip_reason=QE_SKIP_PREREQUISITE_FAILED,
+            failure_detail=str(creation_payload.get("failure_reason") or "patch creation did not produce an applicable diff"),
+            evidence={
+                "creation_status": creation_payload.get("status"),
+                "diff_path": creation_payload.get("diff_path"),
+            },
+        )
+    diff_path = _host_path(creation_payload.get("diff_path"))
+    if diff_path is None or not diff_path.exists():
+        return _qe_gate_result(
+            QE_GATE_APPLY,
+            attempted=False,
+            result=QE_GATE_RESULT_SKIPPED,
+            skip_reason=QE_SKIP_NO_INPUT_AVAILABLE,
+            failure_detail="patch diff artifact is unavailable for apply validation",
+            evidence={"diff_path": creation_payload.get("diff_path")},
+        )
+    try:
+        source_root = _source_root(metadata, runtime)
+    except RuntimeError as exc:
+        return _qe_gate_result(
+            QE_GATE_APPLY,
+            attempted=False,
+            result=QE_GATE_RESULT_SKIPPED,
+            skip_reason=QE_SKIP_ENVIRONMENT_NOT_READY,
+            failure_detail=str(exc),
+            evidence={"diff_path": str(diff_path)},
+        )
+    command = ["patch", "-p1", "--dry-run", "--batch", "--forward", "-i", str(diff_path)]
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=source_root,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        return _qe_gate_result(
+            QE_GATE_APPLY,
+            attempted=True,
+            result=QE_GATE_RESULT_FAILED,
+            failure_reason=QE_APPLY_ERROR,
+            failure_detail=f"apply dry-run timed out: {exc}",
+            evidence={"command": command, "source_root": str(source_root), "diff_path": str(diff_path)},
+        )
+    evidence = {
+        "command": command,
+        "source_root": str(source_root),
+        "diff_path": str(diff_path),
+        "stdout_excerpt": completed.stdout[-2000:],
+        "stderr_excerpt": completed.stderr[-2000:],
+        "exit_code": completed.returncode,
+    }
+    if completed.returncode != 0:
+        return _qe_gate_result(
+            QE_GATE_APPLY,
+            attempted=True,
+            result=QE_GATE_RESULT_FAILED,
+            failure_reason=_qe_apply_failure_reason(completed.stdout, completed.stderr),
+            failure_detail=(completed.stderr or completed.stdout or "patch apply dry-run failed")[-2000:],
+            evidence=evidence,
+        )
+    return _qe_gate_result(
+        QE_GATE_APPLY,
+        attempted=True,
+        result=QE_GATE_RESULT_PASSED,
+        evidence=evidence,
+    )
+
+
+def _run_build_gate(
+    *,
+    apply_gate: dict[str, Any],
+    build_payload: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if not _qe_gate_passed(apply_gate):
+        return _qe_gate_result(
+            QE_GATE_BUILD,
+            attempted=False,
+            result=QE_GATE_RESULT_SKIPPED,
+            skip_reason=QE_SKIP_PREREQUISITE_FAILED,
+            failure_detail="apply gate did not pass",
+        )
+    if not build_payload:
+        return _qe_gate_result(
+            QE_GATE_BUILD,
+            attempted=False,
+            result=QE_GATE_RESULT_SKIPPED,
+            skip_reason=QE_SKIP_PREREQUISITE_FAILED,
+            failure_detail="build payload is unavailable",
+        )
+    build_status = str(build_payload.get("status") or "")
+    evidence = {
+        "build_status": build_status,
+        "build_log_path": build_payload.get("build_log_path"),
+        "patched_binary_path": build_payload.get("patched_binary_path"),
+        "patched_harness_name": build_payload.get("patched_harness_name"),
+    }
+    if build_status == "build_succeeded":
+        return _qe_gate_result(
+            QE_GATE_BUILD,
+            attempted=True,
+            result=QE_GATE_RESULT_PASSED,
+            evidence=evidence,
+        )
+    detail = str(build_payload.get("error") or "patch build failed")
+    return _qe_gate_result(
+        QE_GATE_BUILD,
+        attempted=True,
+        result=QE_GATE_RESULT_FAILED,
+        failure_reason=_qe_build_failure_reason(detail),
+        failure_detail=detail,
+        evidence=evidence,
+    )
+
+
+def _run_pov_replay_gate(
+    *,
+    metadata: dict[str, Any],
+    runtime: dict[str, Any],
+    build_payload: dict[str, Any] | None,
+    build_gate: dict[str, Any],
+    task_id: str,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    if not _qe_gate_passed(build_gate):
+        return (
+            _qe_gate_result(
+                QE_GATE_POV_REPLAY,
+                attempted=False,
+                result=QE_GATE_RESULT_SKIPPED,
+                skip_reason=QE_SKIP_PREREQUISITE_FAILED,
+                failure_detail="build gate did not pass",
+            ),
+            None,
+        )
+    if _truthy(metadata.get("PATCH_DISABLE_POV_REPLAY_GATE")):
+        return (
+            _qe_gate_result(
+                QE_GATE_POV_REPLAY,
+                attempted=False,
+                result=QE_GATE_RESULT_SKIPPED,
+                skip_reason=QE_SKIP_EXPLICITLY_DISABLED,
+                failure_detail="patch metadata explicitly disabled pov replay gate",
+            ),
+            None,
+        )
+    try:
+        testcase_path = str(_load_primary_testcase(metadata, runtime))
+    except RuntimeError as exc:
+        return (
+            _qe_gate_result(
+                QE_GATE_POV_REPLAY,
+                attempted=False,
+                result=QE_GATE_RESULT_SKIPPED,
+                skip_reason=QE_SKIP_NO_INPUT_AVAILABLE,
+                failure_detail=str(exc),
+            ),
+            None,
+        )
+    patched_binary_path = str((build_payload or {}).get("patched_binary_path") or "")
+    patched_harness_name = str((build_payload or {}).get("patched_harness_name") or "")
+    if not patched_binary_path or not patched_harness_name:
+        return (
+            _qe_gate_result(
+                QE_GATE_POV_REPLAY,
+                attempted=False,
+                result=QE_GATE_RESULT_SKIPPED,
+                skip_reason=QE_SKIP_ENVIRONMENT_NOT_READY,
+                failure_detail="patch build succeeded but no replay-capable binary/harness was registered for QE",
+                evidence={
+                    "patched_binary_path": (build_payload or {}).get("patched_binary_path"),
+                    "patched_harness_name": (build_payload or {}).get("patched_harness_name"),
+                },
+            ),
+            None,
+        )
+    try:
+        pov_replay = _replay_input(patched_binary_path, patched_harness_name, testcase_path, task_root(task_id))
+    except subprocess.TimeoutExpired as exc:
+        return (
+            _qe_gate_result(
+                QE_GATE_POV_REPLAY,
+                attempted=True,
+                result=QE_GATE_RESULT_FAILED,
+                failure_reason=QE_POV_TIMEOUT,
+                failure_detail=str(exc),
+                evidence={
+                    "patched_binary_path": patched_binary_path,
+                    "patched_harness_name": patched_harness_name,
+                    "testcase_path": testcase_path,
+                },
+            ),
+            None,
+        )
+    except Exception as exc:
+        return (
+            _qe_gate_result(
+                QE_GATE_POV_REPLAY,
+                attempted=True,
+                result=QE_GATE_RESULT_FAILED,
+                failure_reason=QE_POV_ENVIRONMENT_ERROR,
+                failure_detail=str(exc),
+                evidence={
+                    "patched_binary_path": patched_binary_path,
+                    "patched_harness_name": patched_harness_name,
+                    "testcase_path": testcase_path,
+                },
+            ),
+            None,
+        )
+    if pov_replay.get("crash_detected"):
+        return (
+            _qe_gate_result(
+                QE_GATE_POV_REPLAY,
+                attempted=True,
+                result=QE_GATE_RESULT_FAILED,
+                failure_reason=QE_POV_STILL_CRASHES,
+                failure_detail="patched binary still crashes on the confirmed PoV testcase",
+                evidence=pov_replay,
+            ),
+            pov_replay,
+        )
+    return (
+        _qe_gate_result(
+            QE_GATE_POV_REPLAY,
+            attempted=True,
+            result=QE_GATE_RESULT_PASSED,
+            evidence=pov_replay,
+        ),
+        pov_replay,
+    )
+
+
+def _run_regression_gate(
+    *,
+    metadata: dict[str, Any],
+    runtime: dict[str, Any],
+    build_payload: dict[str, Any] | None,
+    pov_gate: dict[str, Any],
+    task_id: str,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    if not _qe_gate_passed(pov_gate):
+        return (
+            _qe_gate_result(
+                QE_GATE_REGRESSION,
+                attempted=False,
+                result=QE_GATE_RESULT_SKIPPED,
+                skip_reason=QE_SKIP_PREREQUISITE_FAILED,
+                failure_detail="pov replay gate did not pass",
+            ),
+            [],
+        )
+    if _truthy(metadata.get("PATCH_DISABLE_REGRESSION_GATE")):
+        return (
+            _qe_gate_result(
+                QE_GATE_REGRESSION,
+                attempted=False,
+                result=QE_GATE_RESULT_SKIPPED,
+                skip_reason=QE_SKIP_EXPLICITLY_DISABLED,
+                failure_detail="patch metadata explicitly disabled regression gate",
+            ),
+            [],
+        )
+    regression_inputs = _load_regression_inputs(metadata, runtime)
+    if not regression_inputs:
+        return (
+            _qe_gate_result(
+                QE_GATE_REGRESSION,
+                attempted=False,
+                result=QE_GATE_RESULT_SKIPPED,
+                skip_reason=QE_SKIP_NO_REGRESSION_CORPUS,
+                failure_detail="no regression corpus inputs were available for QE",
+            ),
+            [],
+        )
+    binary_path = str((build_payload or {}).get("patched_binary_path") or "")
+    harness_name = str((build_payload or {}).get("patched_harness_name") or "")
+    regression_results: list[dict[str, Any]] = []
+    for candidate in regression_inputs:
+        try:
+            regression_results.append(_replay_input(binary_path, harness_name, str(candidate), task_root(task_id)))
+        except subprocess.TimeoutExpired as exc:
+            return (
+                _qe_gate_result(
+                    QE_GATE_REGRESSION,
+                    attempted=True,
+                    result=QE_GATE_RESULT_FAILED,
+                    failure_reason=QE_REGRESSION_TIMEOUT,
+                    failure_detail=str(exc),
+                    evidence={
+                        "candidate_path": str(candidate),
+                        "attempted_count": len(regression_results),
+                    },
+                ),
+                regression_results,
+            )
+        except Exception as exc:
+            return (
+                _qe_gate_result(
+                    QE_GATE_REGRESSION,
+                    attempted=True,
+                    result=QE_GATE_RESULT_FAILED,
+                    failure_reason=QE_REGRESSION_ENVIRONMENT_ERROR,
+                    failure_detail=str(exc),
+                    evidence={
+                        "candidate_path": str(candidate),
+                        "attempted_count": len(regression_results),
+                    },
+                ),
+                regression_results,
+            )
+    if any(result.get("crash_detected") for result in regression_results):
+        return (
+            _qe_gate_result(
+                QE_GATE_REGRESSION,
+                attempted=True,
+                result=QE_GATE_RESULT_FAILED,
+                failure_reason=QE_REGRESSION_CRASH,
+                failure_detail="patched binary regressed on non-crashing seed inputs",
+                evidence={"regression_results": regression_results},
+            ),
+            regression_results,
+        )
+    return (
+        _qe_gate_result(
+            QE_GATE_REGRESSION,
+            attempted=True,
+            result=QE_GATE_RESULT_PASSED,
+            evidence={"regression_results": regression_results},
+        ),
+        regression_results,
+    )
+
+
+def _summarize_qe_gates(
+    *,
+    task_id: str,
+    now: str,
+    qe_gate_results: dict[str, dict[str, Any]],
+) -> tuple[Path, dict[str, Any]]:
+    final_verdict = QE_FINAL_VERDICT_ACCEPTED
+    rejection_gate = None
+    rejection_reason = None
+    for gate in (
+        QE_GATE_APPLY,
+        QE_GATE_BUILD,
+        QE_GATE_POV_REPLAY,
+        QE_GATE_REGRESSION,
+    ):
+        result = qe_gate_results.get(gate) or {}
+        if result.get("result") == QE_GATE_RESULT_FAILED:
+            final_verdict = QE_FINAL_VERDICT_REJECTED
+            rejection_gate = gate
+            rejection_reason = result.get("failure_reason")
+            break
+        if result.get("result") == QE_GATE_RESULT_SKIPPED:
+            final_verdict = QE_FINAL_VERDICT_INCOMPLETE
+            rejection_gate = gate
+            rejection_reason = result.get("skip_reason")
+            break
+    payload = {
+        "task_id": task_id,
+        "generated_at": now,
+        "gates": qe_gate_results,
+        "final_verdict": final_verdict,
+        "rejection_gate": rejection_gate,
+        "rejection_reason": rejection_reason,
+    }
+    return _write(_qe_gate_summary_path(task_id), payload), payload
+
+
+def _legacy_qe_outcome_from_summary(
+    *,
+    summary_payload: dict[str, Any],
+    qe_gate_results: dict[str, dict[str, Any]],
+) -> tuple[str, str, str]:
+    final_verdict = str(summary_payload.get("final_verdict") or QE_FINAL_VERDICT_INCOMPLETE)
+    rejection_gate = str(summary_payload.get("rejection_gate") or "")
+    gates = qe_gate_results
+    if final_verdict == QE_FINAL_VERDICT_ACCEPTED:
+        return (
+            "approved",
+            "patched binary builds cleanly, blocks the PoV, and passes sampled regression inputs",
+            "patch_qe_passed",
+        )
+    if rejection_gate == QE_GATE_APPLY:
+        gate = gates.get(QE_GATE_APPLY) or {}
+        return (
+            "build_failed",
+            f"apply gate {gate.get('result')}: {gate.get('failure_reason') or gate.get('skip_reason') or 'unknown'}",
+            "patch_diff_not_applicable_for_qe",
+        )
+    if rejection_gate == QE_GATE_BUILD:
+        gate = gates.get(QE_GATE_BUILD) or {}
+        return (
+            "build_failed",
+            str(gate.get("failure_detail") or gate.get("failure_reason") or "patch build failed"),
+            "patch_applied_but_build_failed",
+        )
+    if rejection_gate == QE_GATE_POV_REPLAY:
+        gate = gates.get(QE_GATE_POV_REPLAY) or {}
+        if gate.get("result") == QE_GATE_RESULT_FAILED:
+            return (
+                "pov_failed",
+                str(gate.get("failure_detail") or "patched binary still crashes on the confirmed PoV testcase"),
+                "patch_build_passed_but_pov_still_reproduces",
+            )
+        return (
+            "build_failed",
+            f"pov replay gate skipped: {gate.get('skip_reason') or 'unknown'}",
+            "patch_build_passed_but_qe_incomplete",
+        )
+    gate = gates.get(QE_GATE_REGRESSION) or {}
+    if gate.get("result") == QE_GATE_RESULT_FAILED:
+        return (
+            "regression_failed",
+            str(gate.get("failure_detail") or "patched binary regressed on non-crashing seed inputs"),
+            "patch_build_passed_but_regression_failed",
+        )
+    return (
+        "regression_failed",
+        f"regression gate skipped: {gate.get('skip_reason') or 'unknown'}",
+        "patch_pov_blocked_but_regression_not_run",
+    )
+
+
 def write_qe(
     task_id: str,
     *,
     now: str,
     metadata: dict[str, Any] | None = None,
     runtime: dict[str, Any] | None = None,
+    creation_payload: dict[str, Any] | None = None,
     build_payload: dict[str, Any] | None = None,
 ) -> tuple[Path, str]:
     metadata = metadata or {}
@@ -3232,27 +3840,8 @@ def write_qe(
         scenario = str(metadata.get("patch_validation_scenario", "qe_fail"))
         if scenario in {"qe_pass", "approved"}:
             verdict = "approved"
-            verifier_gates = _verifier_gates_passed(verdict=verdict)
-            payload = {
-                "task_id": task_id,
-                "generated_at": now,
-                "stage": "QE",
-                "verdict": verdict,
-                "reason": "validation scenario requested approved QE result",
-                "supported_verdicts": ["build_failed", "pov_failed", "regression_failed", "approved"],
-                "verifier_gates_passed": verifier_gates,
-                **_patch_truth_fields(provenance="deterministic_rule", semantic_strength="placeholder"),
-                **_llm_placeholder_fields("QE"),
-            }
-            _write_semantic_validation(
-                verdict=verdict,
-                classification=payload.get("patch_result_classification", "patch_qe_passed"),
-                build_result=None,
-                reason=payload["reason"],
-                verifier_gates_passed=verifier_gates,
-            )
-            return _write(patch_qe_manifest_path(task_id), payload), verdict
-        if scenario == "pov_failed":
+            reason = "validation scenario requested approved QE result"
+        elif scenario == "pov_failed":
             verdict = "pov_failed"
             reason = "PoV replay did not reproduce in validation scenario"
         elif scenario == "regression_failed":
@@ -3261,7 +3850,13 @@ def write_qe(
         else:
             verdict = "build_failed"
             reason = "build step failed in validation scenario"
-        verifier_gates = _verifier_gates_passed(verdict=verdict)
+        qe_gate_results = _build_synthetic_qe_gate_results(verdict=verdict, reason=reason)
+        qe_summary_path, qe_summary_payload = _summarize_qe_gates(
+            task_id=task_id,
+            now=now,
+            qe_gate_results=qe_gate_results,
+        )
+        verifier_gates = _verifier_gates_passed(qe_gate_results=qe_gate_results)
         payload = {
             "task_id": task_id,
             "generated_at": now,
@@ -3270,111 +3865,63 @@ def write_qe(
             "reason": reason,
             "supported_verdicts": ["build_failed", "pov_failed", "regression_failed", "approved"],
             "verifier_gates_passed": verifier_gates,
+            "qe_gate_results": qe_gate_results,
+            "qe_gate_summary_artifact_path": str(qe_summary_path),
+            "qe_gate_summary": qe_summary_payload,
+            "final_verdict": qe_summary_payload.get("final_verdict"),
+            "rejection_gate": qe_summary_payload.get("rejection_gate"),
             **_patch_truth_fields(provenance="deterministic_rule", semantic_strength="placeholder"),
             **_llm_placeholder_fields("QE"),
         }
         _write_semantic_validation(
             verdict=verdict,
-            classification=payload.get("patch_result_classification", "syntactic_patch_only"),
+            classification=payload.get(
+                "patch_result_classification",
+                "patch_qe_passed" if verdict == "approved" else "syntactic_patch_only",
+            ),
             build_result=None,
             reason=reason,
             verifier_gates_passed=verifier_gates,
         )
         return _write(patch_qe_manifest_path(task_id), payload), verdict
 
-    build_status = build_payload.get("status")
-    if build_status != "build_succeeded":
-        verdict = "build_failed"
-        verifier_gates = _verifier_gates_passed(build_payload=build_payload, verdict=verdict)
-        payload = {
-            "task_id": task_id,
-            "generated_at": now,
-            "stage": "QE",
-            "verdict": verdict,
-            "reason": build_payload.get("error", "patch build failed"),
-            "build_result": build_payload,
-            "patch_result_classification": "patch_applied_but_build_failed",
-            "supported_verdicts": ["build_failed", "pov_failed", "regression_failed", "approved"],
-            "verifier_gates_passed": verifier_gates,
-            **_patch_truth_fields(
-                provenance=build_payload.get("patch_generation_provenance", "deterministic_rule"),
-                semantic_strength=build_payload.get("patch_semantic_strength", "placeholder"),
-                patch_llm_request_attempted=bool(build_payload.get("patch_llm_request_attempted")),
-                patch_llm_real_call_verified=bool(build_payload.get("patch_llm_real_call_verified")),
-            ),
-            **_llm_fields_from_metadata(build_payload),
-        }
-        _write_semantic_validation(
-            verdict=verdict,
-            classification="patch_applied_but_build_failed",
-            build_result=build_payload,
-            reason=build_payload.get("error", "patch build failed"),
-            verifier_gates_passed=verifier_gates,
-        )
-        return _write(patch_qe_manifest_path(task_id), payload), verdict
-
-    testcase_path = str(_load_primary_testcase(metadata, runtime))
-    patched_binary_path = build_payload.get("patched_binary_path")
-    patched_harness_name = build_payload.get("patched_harness_name")
-    if not patched_binary_path or not patched_harness_name:
-        verdict = "build_failed"
-        reason = "patch build succeeded but no replay-capable binary/harness was registered for QE"
-        verifier_gates = _verifier_gates_passed(build_payload=build_payload, verdict=verdict)
-        payload = {
-            "task_id": task_id,
-            "generated_at": now,
-            "stage": "QE",
-            "verdict": verdict,
-            "reason": reason,
-            "build_result": build_payload,
-            "patch_result_classification": "patch_build_passed_but_replay_profile_missing",
-            "supported_verdicts": ["build_failed", "pov_failed", "regression_failed", "approved"],
-            "verifier_gates_passed": verifier_gates,
-            **_patch_truth_fields(
-                provenance=build_payload.get("patch_generation_provenance", "deterministic_rule"),
-                semantic_strength=build_payload.get("patch_semantic_strength", "placeholder"),
-                patch_llm_request_attempted=bool(build_payload.get("patch_llm_request_attempted")),
-                patch_llm_real_call_verified=bool(build_payload.get("patch_llm_real_call_verified")),
-            ),
-            **_llm_fields_from_metadata(build_payload),
-        }
-        _write_semantic_validation(
-            verdict=verdict,
-            classification="patch_build_passed_but_replay_profile_missing",
-            build_result=build_payload,
-            reason=reason,
-            verifier_gates_passed=verifier_gates,
-        )
-        return _write(patch_qe_manifest_path(task_id), payload), verdict
-
-    binary_path = str(patched_binary_path)
-    harness_name = str(patched_harness_name)
-    pov_replay = _replay_input(binary_path, harness_name, testcase_path, task_root(task_id))
-
-    regression_inputs = _load_regression_inputs(metadata, runtime)
-    regression_results = [
-        _replay_input(binary_path, harness_name, str(candidate), task_root(task_id))
-        for candidate in regression_inputs
-    ]
-
-    if pov_replay["crash_detected"]:
-        verdict = "pov_failed"
-        reason = "patched binary still crashes on the confirmed PoV testcase"
-        patch_result_classification = "patch_build_passed_but_pov_still_reproduces"
-    elif any(result["crash_detected"] for result in regression_results):
-        verdict = "regression_failed"
-        reason = "patched binary regressed on non-crashing seed inputs"
-        patch_result_classification = "patch_build_passed_but_regression_failed"
-    else:
-        verdict = "approved"
-        reason = "patched binary builds cleanly, blocks the PoV, and passes sampled regression inputs"
-        patch_result_classification = "patch_qe_passed"
-    verifier_gates = _verifier_gates_passed(
-        build_payload=build_payload,
-        pov_replay=pov_replay,
-        regression_results=regression_results,
-        verdict=verdict,
+    apply_gate = _run_apply_gate(
+        task_id=task_id,
+        metadata=metadata,
+        runtime=runtime,
+        creation_payload=creation_payload,
     )
+    build_gate = _run_build_gate(apply_gate=apply_gate, build_payload=build_payload)
+    pov_gate, pov_replay = _run_pov_replay_gate(
+        metadata=metadata,
+        runtime=runtime,
+        build_payload=build_payload,
+        build_gate=build_gate,
+        task_id=task_id,
+    )
+    regression_gate, regression_results = _run_regression_gate(
+        metadata=metadata,
+        runtime=runtime,
+        build_payload=build_payload,
+        pov_gate=pov_gate,
+        task_id=task_id,
+    )
+    qe_gate_results = {
+        QE_GATE_APPLY: apply_gate,
+        QE_GATE_BUILD: build_gate,
+        QE_GATE_POV_REPLAY: pov_gate,
+        QE_GATE_REGRESSION: regression_gate,
+    }
+    qe_summary_path, qe_summary_payload = _summarize_qe_gates(
+        task_id=task_id,
+        now=now,
+        qe_gate_results=qe_gate_results,
+    )
+    verdict, reason, patch_result_classification = _legacy_qe_outcome_from_summary(
+        summary_payload=qe_summary_payload,
+        qe_gate_results=qe_gate_results,
+    )
+    verifier_gates = _verifier_gates_passed(qe_gate_results=qe_gate_results)
 
     payload = {
         "task_id": task_id,
@@ -3388,6 +3935,11 @@ def write_qe(
         "patch_result_classification": patch_result_classification,
         "supported_verdicts": ["build_failed", "pov_failed", "regression_failed", "approved"],
         "verifier_gates_passed": verifier_gates,
+        "qe_gate_results": qe_gate_results,
+        "qe_gate_summary_artifact_path": str(qe_summary_path),
+        "qe_gate_summary": qe_summary_payload,
+        "final_verdict": qe_summary_payload.get("final_verdict"),
+        "rejection_gate": qe_summary_payload.get("rejection_gate"),
         **_patch_truth_fields(
             provenance=build_payload.get("patch_generation_provenance", "deterministic_rule"),
             semantic_strength=build_payload.get("patch_semantic_strength", "placeholder"),
@@ -3431,6 +3983,26 @@ def _classify_attempt_failure(
         "llm_reflection_not_attempted",
     }:
         return "llm_fail", llm_failure_reason
+    qe_gate_results = qe_payload.get("qe_gate_results") or {}
+    gate_failure_names = {
+        QE_GATE_APPLY: "apply_gate",
+        QE_GATE_BUILD: "build_gate",
+        QE_GATE_POV_REPLAY: "pov_replay_gate",
+        QE_GATE_REGRESSION: "regression_gate",
+    }
+    for gate in (QE_GATE_APPLY, QE_GATE_BUILD, QE_GATE_POV_REPLAY, QE_GATE_REGRESSION):
+        gate_payload = qe_gate_results.get(gate) or {}
+        if gate_payload.get("result") == QE_GATE_RESULT_FAILED:
+            return gate_failure_names[gate], str(
+                gate_payload.get("failure_detail") or gate_payload.get("failure_reason") or gate
+            )
+        if gate_payload.get("result") == QE_GATE_RESULT_SKIPPED and gate_payload.get("skip_reason") not in {
+            None,
+            QE_SKIP_PREREQUISITE_FAILED,
+        }:
+            return gate_failure_names[gate], str(
+                gate_payload.get("failure_detail") or gate_payload.get("skip_reason") or gate
+            )
     if qe_verdict == "build_failed":
         return "build_fail", str(qe_payload.get("reason") or build_payload.get("error") or "patch build failed")
     if qe_verdict in {"pov_failed", "regression_failed"}:
@@ -3536,7 +4108,7 @@ def _reflection_next_attempt_plan(
         else:
             next_family = _next_untried_family(family_priority, tried_families)
             next_context_source = PATCH_CONTEXT_SOURCE_CALL_GRAPH
-    elif failure_reason == "build_fail":
+    elif failure_reason in {"apply_gate", "build_gate", "build_fail"}:
         next_family = current_family
         next_context_source = (
             PATCH_CONTEXT_SOURCE_TRACE_EXPANDED
