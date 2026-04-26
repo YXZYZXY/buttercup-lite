@@ -53,7 +53,7 @@ def _format_specific_guidance(binary_target_name: str, slice_payload: dict) -> s
         ensure_ascii=False,
     ).lower()
     hints: list[str] = []
-    if any(token in blob for token in ("cjson", "json", "parsewithlength", "parse_value")):
+    if any(token in blob for token in ("json", "object", "array", "string", "number")):
         hints.extend(
             [
                 "The target appears JSON-like: include deeply nested arrays/objects, very long strings, escaped unicode/backslash strings, duplicate keys, truncated containers, and mixed scalar/object/array payloads.",
@@ -61,21 +61,21 @@ def _format_specific_guidance(binary_target_name: str, slice_payload: dict) -> s
                 "If contract hints mention control flags or termination, honor them explicitly: prefix required flag bytes before the JSON body and terminate the payload with a NUL byte when required.",
             ]
         )
-    if any(token in blob for token in ("ini", "section", "ini_parse", "key", "value")):
+    if any(token in blob for token in ("ini", "section", "key", "value", "config")):
         hints.extend(
             [
                 "The target appears INI-like: include oversized section names, duplicate sections, multiline-looking values, comment/semicolon variants, and malformed brackets.",
                 "For VULN_DISCOVERY, include at least one oversized section header and one nested/malformed bracket input.",
             ]
         )
-    if any(token in blob for token in ("yaml", "scanner", "parser", "anchor", "alias")):
+    if any(token in blob for token in ("yaml", "scanner", "anchor", "alias", "document")):
         hints.extend(
             [
                 "The target appears YAML-like: include nested mappings/sequences, anchors/aliases, long scalars, indentation edge cases, explicit tags, and truncated documents.",
                 "For VULN_DISCOVERY, include at least one deeply indented mapping and one alias/anchor pressure case.",
             ]
         )
-    if any(token in blob for token in ("plist", "bplist", "xplist", "oplist", "jplist")):
+    if any(token in blob for token in ("plist", "bplist", "xplist", "xml plist", "property list")):
         hints.extend(
             [
                 "The target appears plist-like: prefer parser-oriented payloads such as XML plist snippets, compact binary plist headers, truncated trailer variants, and malformed object/table layouts.",

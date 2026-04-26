@@ -144,8 +144,24 @@ def _selected_target_is_project_local(
 ) -> bool:
     if bool(candidate_promotion_payload.get("selected_target_is_project_local")):
         return True
+    selected_targets = {
+        str(ida_runtime_view.get("selected_target_function") or "").strip(),
+        str(ida_runtime_view.get("selected_binary_slice_focus") or "").strip(),
+    }
+    selected_targets.discard("")
     for item in (ida_runtime_view.get("focus_candidates") or [])[:4]:
-        if isinstance(item, dict) and bool(item.get("project_local_match")):
+        if not isinstance(item, dict):
+            continue
+        if bool(item.get("project_local_match")):
+            return True
+        candidate_name = str(item.get("name") or "").strip()
+        if candidate_name and candidate_name in selected_targets:
+            return True
+    for item in (ida_runtime_view.get("parser_candidates") or [])[:8]:
+        if not isinstance(item, dict):
+            continue
+        candidate_name = str(item.get("name") or "").strip()
+        if candidate_name and candidate_name in selected_targets:
             return True
     return False
 

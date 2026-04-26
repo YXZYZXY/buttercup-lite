@@ -387,6 +387,21 @@ def collect_coverage_snapshot(task_id: str, task_store: TaskStateStore) -> tuple
         manifest_path = Path(task.runtime.get("binary_execution_manifest_path", ""))
         binary_manifest = _load_json(manifest_path)
         run_records = binary_manifest.get("run_records", [])
+        input_hashes: set[str] = set()
+        for item in run_records:
+            if not isinstance(item, dict):
+                continue
+            raw_path = str(item.get("input_path") or "").strip()
+            if not raw_path:
+                continue
+            input_path = Path(raw_path)
+            digest = raw_path
+            if input_path.exists() and input_path.is_file():
+                try:
+                    digest = hashlib.sha256(input_path.read_bytes()).hexdigest()[:16]
+                except OSError:
+                    digest = raw_path
+            input_hashes.add(digest)
         executed_bytes = sum(int(item.get("size", 0) or 0) for item in binary_manifest.get("staged_inputs", []))
         if not executed_bytes:
             executed_bytes = sum(
@@ -397,6 +412,8 @@ def collect_coverage_snapshot(task_id: str, task_store: TaskStateStore) -> tuple
         unique_exit_codes = sorted({item.get("exit_code") for item in run_records if item.get("exit_code") is not None})
         stderr_signal_count = sum(1 for item in run_records if item.get("stderr_excerpt"))
         signal_category_counts = dict(binary_manifest.get("signal_category_counts") or {})
+        execution_count = int(binary_manifest.get("run_count", len(run_records)) or 0)
+        crash_candidate_count = int(binary_manifest.get("crash_candidate_count", 0) or 0)
         snapshot = {
             "task_id": task_id,
             "captured_at": task_store.now(),
@@ -405,18 +422,21 @@ def collect_coverage_snapshot(task_id: str, task_store: TaskStateStore) -> tuple
             "coverage_source": "binary_execution_manifest",
             "coverage_kind": "binary_execution_proxy",
             "binary_execution_manifest_path": str(manifest_path) if manifest_path.exists() else None,
-            "execution_run_count": int(binary_manifest.get("run_count", len(run_records)) or 0),
+            "execution_run_count": execution_count,
+            "execution_count": execution_count,
             "execution_input_count": int(binary_manifest.get("input_count", 0) or 0),
+            "unique_input_count": len(input_hashes),
             "executed_input_bytes": executed_bytes,
             "unique_exit_codes": unique_exit_codes,
             "stderr_signal_count": stderr_signal_count,
             "execution_signal_count": int(binary_manifest.get("execution_signal_count", 0) or 0),
+            "crash_signal_rate": round(crash_candidate_count / max(execution_count, 1), 6) if execution_count else 0.0,
             "signal_category_counts": signal_category_counts,
             "per_input_execution_summary": binary_manifest.get("per_input_execution_summary", []),
-            "crash_candidate_count": int(binary_manifest.get("crash_candidate_count", 0) or 0),
+            "crash_candidate_count": crash_candidate_count,
             "active_corpus_files": _count_files(Path(task.layout.get("corpus_binary_active", task_dir / "corpus" / "binary_active"))),
             "new_corpus_files": 0,
-            "raw_crash_count": int(binary_manifest.get("crash_candidate_count", 0) or 0),
+            "raw_crash_count": crash_candidate_count,
             "selected_binary_slice_focus": task.runtime.get("selected_binary_slice_focus"),
             "slice_focus_evidence": binary_manifest.get("slice_focus_evidence", {}),
             "input_contract_evidence": binary_manifest.get("input_contract_evidence", {}),

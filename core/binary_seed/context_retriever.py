@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -112,16 +113,17 @@ RUNTIME_NOISE_PREFIXES = (
     "frame_dummy",
     "__do_global_dtors_aux",
 )
-PROJECT_TOKEN_HINTS = {
-    "cjson": ("cjson", "cjson_", "parsewithlength", "parsewithopts", "printbuffer"),
-    "inih": ("ini_", "ini_parse", "ini_reader", "inih"),
-    "libyaml": ("yaml_", "yaml_parser", "yaml_scanner", "yaml_emitter"),
-    "libxml2": ("xml", "html", "xmlparse", "xmlread", "xmlreader", "xmlload"),
-    "miniz": ("mz_", "tinfl", "tdefl", "miniz"),
-    "h3": ("h3_", "cell", "polygon", "geo", "latlng"),
-    "libspng": ("spng_", "png_", "libspng"),
-    "libplist": ("plist_", "bplist", "oplist", "xplist", "jplist", "libplist"),
-    "zlib": ("zlib", "inflate", "deflate", "gz", "crc32", "adler32"),
+GENERIC_PROJECT_TOKEN_STOPWORDS = {
+    "lib",
+    "bin",
+    "binary",
+    "current",
+    "target",
+    "proof",
+    "main",
+    "official",
+    "fuzz",
+    "seed",
 }
 
 
@@ -158,37 +160,34 @@ def _derive_project_tokens(task_dir: Path, summary: dict[str, Any]) -> tuple[str
         dataset_payload = _load_json(Path(dataset_manifest_path), {})
         project_name = str(dataset_payload.get("project_name") or "").strip().lower() or None
     if project_name is None:
-        ref = str((task_payload.get("source") or {}).get("ref") or metadata.get("run_label") or summary.get("binary_name") or "").lower()
-        for candidate in PROJECT_TOKEN_HINTS:
-            if candidate in ref:
-                project_name = candidate
-                break
-    if project_name:
-        normalized = project_name.lower()
-        if normalized not in PROJECT_TOKEN_HINTS:
-            for candidate in PROJECT_TOKEN_HINTS:
-                if candidate in normalized:
-                    project_name = candidate
-                    break
-    tokens = list(PROJECT_TOKEN_HINTS.get(project_name or "", ()))
-    binary_name = str(summary.get("binary_name") or "").lower()
-    if binary_name and binary_name not in {"current", "binary", "a.out"}:
-        tokens.append(binary_name)
-    extra = [
-        token
-        for token in (
-            str(metadata.get("benchmark_profile_name") or "").lower(),
-            str(metadata.get("repo_name") or "").lower(),
-        )
-        if token
+        project_name = str(
+            (task_payload.get("source") or {}).get("ref")
+            or metadata.get("run_label")
+            or summary.get("binary_name")
+            or ""
+        ).strip().lower() or None
+    raw_token_sources = [
+        str(project_name or "").lower(),
+        str(summary.get("binary_name") or "").lower(),
+        str(metadata.get("benchmark_profile_name") or "").lower(),
+        str(metadata.get("repo_name") or "").lower(),
+        str((task_payload.get("source") or {}).get("ref") or "").lower(),
     ]
-    tokens.extend(extra)
     normalized_tokens: list[str] = []
-    for token in tokens:
-        token = token.strip().lower()
-        if not token or token in normalized_tokens:
+    for raw_value in raw_token_sources:
+        if not raw_value:
             continue
-        normalized_tokens.append(token)
+        candidates = [raw_value] + re.split(r"[^a-z0-9]+", raw_value)
+        for token in candidates:
+            token = token.strip().lower()
+            if (
+                not token
+                or token in normalized_tokens
+                or token in GENERIC_PROJECT_TOKEN_STOPWORDS
+                or len(token) < 3
+            ):
+                continue
+            normalized_tokens.append(token)
     return project_name, tuple(normalized_tokens), {
         "project_name": project_name,
         "project_tokens": normalized_tokens,
@@ -535,7 +534,7 @@ def retrieve_binary_context(task_dir: Path, *, input_mode: str, launcher_semanti
                 or _matches(name, FUNCTION_KEYWORDS)
                 or candidate.get("string_refs")
                 or name in functions_with_string_refs
-                or any(token in lowered for token in ("parse", "load", "scan", "stream", "reader", "yaml_", "ini_", "cjson", "xml"))
+                or any(token in lowered for token in ("parse", "load", "scan", "stream", "reader", "decode", "plist", "json", "xml"))
             ):
                 continue
             seed_candidates.append(function_lookup.get(name, dict(candidate)))

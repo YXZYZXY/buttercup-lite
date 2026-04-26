@@ -16,7 +16,7 @@ from core.campaign.corpus_merger import (
 )
 from core.campaign.corpus_quality import safe_corpus_component
 from core.campaign.fabric_store import FabricStore, fabric_events_path, fabric_state_path
-from core.storage.layout import task_root, tasks_root
+from core.storage.layout import binary_feedback_bridge_path, task_root, tasks_root
 
 
 def _now() -> str:
@@ -205,6 +205,145 @@ def _upsert_named(items: list[dict[str, Any]], item: dict[str, Any], *, key_fiel
     payload.setdefault("last_seen_at", _now())
     payload.setdefault("hit_count", 1)
     items.append(payload)
+
+
+def _binary_feedback_item_name(item: dict[str, Any], fallback: str | None = None) -> str | None:
+    for key in ("name", "selected_target_function", "selected_binary_slice_focus"):
+        name = str(item.get(key) or "").strip()
+        if name:
+            return name
+    fallback_name = str(fallback or "").strip()
+    return fallback_name or None
+
+
+def _binary_feedback_entries_for_round(
+    *,
+    campaign_task_id: str,
+    round_task_id: str,
+    selected_harness: str | None,
+    selected_target_function: str | None,
+) -> dict[str, Any]:
+    bridge_path = binary_feedback_bridge_path(round_task_id)
+    bridge = _read_json(bridge_path, {})
+    if not bridge:
+        return {
+            "binary_feedback_bridge_path": None,
+            "reseed_entries": [],
+            "candidate_entries": [],
+            "family_entries": [],
+        }
+
+    def _base_entry(
+        name: str,
+        *,
+        queue_kind: str,
+        priority: int,
+        reason: str,
+        source_level: str,
+    ) -> dict[str, Any]:
+        return {
+            "name": name,
+            "target_mode": "binary",
+            "harness": selected_harness,
+            "queue_kind": queue_kind,
+            "priority": priority,
+            "source_campaign_task_id": campaign_task_id,
+            "source_round_task_id": round_task_id,
+            "reason": reason,
+            "source_level": source_level,
+            "selection_scope": "system",
+        }
+
+    reseed_entries: list[dict[str, Any]] = []
+    for item in bridge.get("recommended_reseed_targets") or []:
+        if not isinstance(item, dict):
+            continue
+        name = _binary_feedback_item_name(item, selected_target_function)
+        if not name:
+            continue
+        reseed_entries.append(
+            {
+                **_base_entry(
+                    name,
+                    queue_kind="binary_reseed",
+                    priority=int(item.get("priority") or 78),
+                    reason=str(item.get("reason") or bridge.get("feedback_state") or "binary_feedback_reseed"),
+                    source_level=str(item.get("source_level") or "binary_feedback_bridge"),
+                ),
+                "target_type": str(item.get("target_type") or "function"),
+                "selected_binary_slice_focus": item.get("selected_binary_slice_focus") or name,
+            }
+        )
+
+    candidate_entries: list[dict[str, Any]] = []
+    for item in bridge.get("trace_admission_candidates") or []:
+        if not isinstance(item, dict):
+            continue
+        name = _binary_feedback_item_name(item, selected_target_function)
+        if not name:
+            continue
+        admission_mode = str(item.get("admission_mode") or "").strip() or None
+        candidate_entries.append(
+            {
+                **_base_entry(
+                    name,
+                    queue_kind="binary_candidate",
+                    priority=84 if admission_mode == "promoted_candidate" else 76,
+                    reason=str(item.get("reason") or admission_mode or "binary_trace_followup"),
+                    source_level="binary_feedback_bridge",
+                ),
+                "target_type": "function",
+                "selected_binary_slice_focus": item.get("selected_binary_slice_focus") or name,
+                "admission_mode": admission_mode,
+            }
+        )
+
+    family_entries: list[dict[str, Any]] = []
+    for item in bridge.get("promotion_blockers") or []:
+        if not isinstance(item, dict):
+            continue
+        name = _binary_feedback_item_name(item, selected_target_function)
+        if not name:
+            continue
+        family_entries.append(
+            {
+                **_base_entry(
+                    name,
+                    queue_kind="binary_family",
+                    priority=72,
+                    reason=str(item.get("reason") or item.get("kind") or bridge.get("feedback_state") or "binary_family_followup"),
+                    source_level="binary_feedback_bridge",
+                ),
+                "target_type": "function",
+                "selected_binary_slice_focus": item.get("selected_target_function") or item.get("selected_binary_slice_focus") or name,
+                "blocker_kind": item.get("kind"),
+            }
+        )
+    if not family_entries:
+        fallback_name = _binary_feedback_item_name(bridge, selected_target_function)
+        fallback_reason = str(bridge.get("feedback_state") or "").strip()
+        if fallback_name and fallback_reason in {"watchlist_suspicious", "informational_stall", "low_promotion_stall"}:
+            family_entries.append(
+                {
+                    **_base_entry(
+                        fallback_name,
+                        queue_kind="binary_family",
+                        priority=68,
+                        reason=fallback_reason,
+                        source_level="binary_feedback_bridge",
+                    ),
+                    "target_type": "function",
+                    "selected_binary_slice_focus": bridge.get("selected_binary_slice_focus") or fallback_name,
+                    "blocker_kind": fallback_reason,
+                }
+            )
+
+    return {
+        "binary_feedback_bridge_path": str(bridge_path),
+        "reseed_entries": reseed_entries[:8],
+        "candidate_entries": candidate_entries[:8],
+        "family_entries": family_entries[:8],
+    }
 
 
 def register_campaign(
@@ -501,14 +640,20 @@ def claim_planning_feedback(
     claimed_coverage: list[dict[str, Any]] = []
     claimed_candidates: list[dict[str, Any]] = []
     claimed_family: list[dict[str, Any]] = []
+    claimed_binary_reseed: list[dict[str, Any]] = []
+    claimed_binary_candidates: list[dict[str, Any]] = []
+    claimed_binary_family: list[dict[str, Any]] = []
     fabric = FabricStore()
+    allowed_item_types = ["coverage", "candidate_bridge", "family_promotion"]
+    if target_mode == "binary":
+        allowed_item_types.extend(["binary_reseed", "binary_candidate", "binary_family"])
     for _ in range(max(1, min(int(limit), 4))):
         item = fabric.claim_feedback_work_item(
             campaign_task_id=campaign_task_id,
             namespace=fabric_context.get("namespace"),
             lease_seconds=300,
             consumer_id=f"planning::{campaign_task_id}",
-            allowed_item_types=["coverage", "candidate_bridge", "family_promotion"],
+            allowed_item_types=allowed_item_types,
         )
         if not item:
             break
@@ -529,6 +674,12 @@ def claim_planning_feedback(
             claimed_candidates.extend(list(payload.get("candidate_entries") or []))
         elif str(item.get("item_type") or "") == "family_promotion":
             claimed_family.extend(list(payload.get("family_entries") or []))
+        elif str(item.get("item_type") or "") == "binary_reseed":
+            claimed_binary_reseed.extend(list(payload.get("reseed_entries") or []))
+        elif str(item.get("item_type") or "") == "binary_candidate":
+            claimed_binary_candidates.extend(list(payload.get("candidate_entries") or []))
+        elif str(item.get("item_type") or "") == "binary_family":
+            claimed_binary_family.extend(list(payload.get("family_entries") or []))
         fabric.ack_feedback_work_item(
             work_item_id=str(item.get("work_item_id") or ""),
             ack_source="planning_feedback_consumed",
@@ -544,6 +695,9 @@ def claim_planning_feedback(
         "system_candidate_bridge": _select(list(candidates.get("candidates") or []) + claimed_candidates),
         "system_trace_worthy_candidates": _select(list(candidates.get("trace_worthy") or [])),
         "system_family_feedback_queue": _select(list(family.get("family_feedback_queue") or []) + claimed_family),
+        "system_binary_reseed_requests": _select(list(candidates.get("reseed_requests") or []) + claimed_binary_reseed),
+        "system_binary_candidate_targets": _select(list(candidates.get("trace_worthy") or []) + claimed_binary_candidates),
+        "system_binary_family_targets": _select(list(family.get("family_feedback_queue") or []) + claimed_binary_family),
         "per_harness_low_yield": (coverage.get("per_harness_low_yield") or {}).get(harness_key, {}),
         "system_coverage_queue_path": str(system_coverage_queue_path()),
         "system_candidate_queue_path": str(system_candidate_queue_path()),
@@ -1126,6 +1280,96 @@ def update_after_round(
                 },
             )
 
+        binary_feedback_entries = _binary_feedback_entries_for_round(
+            campaign_task_id=campaign_task_id,
+            round_task_id=round_task_id,
+            selected_harness=selected_harness,
+            selected_target_function=selected_target_function,
+        )
+        binary_reseed_feedback_entries = list(binary_feedback_entries.get("reseed_entries") or [])
+        if target_mode == "binary" and binary_reseed_feedback_entries:
+            FabricStore().enqueue_work_item(
+                lane=lane,
+                target_mode=target_mode,
+                project=project,
+                benchmark=str(fabric_context.get("slot_label") or project),
+                namespace=fabric_context.get("namespace"),
+                slot_label=str(fabric_context.get("slot_label") or campaign_task_id),
+                base_task_id=campaign_task_id,
+                donor_task_id=campaign_task_id,
+                priority=78,
+                dedupe_key=f"fabric-feedback::{campaign_task_id}::{round_task_id}::binary_reseed",
+                kind="binary_reseed",
+                item_type="binary_reseed",
+                payload={
+                    "reseed_entries": binary_reseed_feedback_entries,
+                    "binary_feedback_bridge_path": binary_feedback_entries.get("binary_feedback_bridge_path"),
+                },
+                source_campaign=campaign_task_id,
+                source_round=round_task_id,
+                source_slot=str(fabric_context.get("slot_label") or campaign_task_id),
+                metadata={
+                    "feedback_reason": "round_binary_reseed_feedback",
+                    "binary_feedback_bridge_path": binary_feedback_entries.get("binary_feedback_bridge_path"),
+                },
+            )
+
+        binary_candidate_feedback_entries = list(binary_feedback_entries.get("candidate_entries") or [])
+        if target_mode == "binary" and binary_candidate_feedback_entries:
+            FabricStore().enqueue_work_item(
+                lane=lane,
+                target_mode=target_mode,
+                project=project,
+                benchmark=str(fabric_context.get("slot_label") or project),
+                namespace=fabric_context.get("namespace"),
+                slot_label=str(fabric_context.get("slot_label") or campaign_task_id),
+                base_task_id=campaign_task_id,
+                donor_task_id=campaign_task_id,
+                priority=76,
+                dedupe_key=f"fabric-feedback::{campaign_task_id}::{round_task_id}::binary_candidate",
+                kind="binary_candidate",
+                item_type="binary_candidate",
+                payload={
+                    "candidate_entries": binary_candidate_feedback_entries,
+                    "binary_feedback_bridge_path": binary_feedback_entries.get("binary_feedback_bridge_path"),
+                },
+                source_campaign=campaign_task_id,
+                source_round=round_task_id,
+                source_slot=str(fabric_context.get("slot_label") or campaign_task_id),
+                metadata={
+                    "feedback_reason": "round_binary_candidate_feedback",
+                    "binary_feedback_bridge_path": binary_feedback_entries.get("binary_feedback_bridge_path"),
+                },
+            )
+
+        binary_family_feedback_entries = list(binary_feedback_entries.get("family_entries") or [])
+        if target_mode == "binary" and binary_family_feedback_entries:
+            FabricStore().enqueue_work_item(
+                lane=lane,
+                target_mode=target_mode,
+                project=project,
+                benchmark=str(fabric_context.get("slot_label") or project),
+                namespace=fabric_context.get("namespace"),
+                slot_label=str(fabric_context.get("slot_label") or campaign_task_id),
+                base_task_id=campaign_task_id,
+                donor_task_id=campaign_task_id,
+                priority=72,
+                dedupe_key=f"fabric-feedback::{campaign_task_id}::{round_task_id}::binary_family",
+                kind="binary_family",
+                item_type="binary_family",
+                payload={
+                    "family_entries": binary_family_feedback_entries,
+                    "binary_feedback_bridge_path": binary_feedback_entries.get("binary_feedback_bridge_path"),
+                },
+                source_campaign=campaign_task_id,
+                source_round=round_task_id,
+                source_slot=str(fabric_context.get("slot_label") or campaign_task_id),
+                metadata={
+                    "feedback_reason": "round_binary_family_feedback",
+                    "binary_feedback_bridge_path": binary_feedback_entries.get("binary_feedback_bridge_path"),
+                },
+            )
+
     return {
         "system_fabric_root": str(system_fabric_root()),
         "system_orchestrator_state_path": str(system_orchestrator_state_path()),
@@ -1159,6 +1403,10 @@ def update_after_round(
         ),
         "system_candidate_bridge_new_count": max(0, len(candidates.get("candidates") or []) - candidate_count_before),
         "system_trace_worthy_new_count": max(0, len(candidates.get("trace_worthy") or []) - trace_worthy_before),
+        "system_binary_reseed_new_count": len(binary_reseed_feedback_entries),
+        "system_binary_candidate_new_count": len(binary_candidate_feedback_entries),
+        "system_binary_family_new_count": len(binary_family_feedback_entries),
+        "system_binary_feedback_bridge_path": binary_feedback_entries.get("binary_feedback_bridge_path"),
         "system_new_exact_signature_count": len(new_exact),
         "system_new_loose_cluster_count": len(new_loose),
         "system_new_confirmed_family_count": len(new_confirmed),

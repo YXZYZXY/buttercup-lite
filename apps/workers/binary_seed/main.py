@@ -232,7 +232,28 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
     )
     ida_runtime_view = build_binary_ida_runtime_view(task_id, generated_at=task_store.now())
     selected_target_function = str(ida_runtime_view.get("selected_target_function") or "").strip() or None
-    focus_hint = initial_focus_hint or selected_target_function
+    binary_reseed_targets = [
+        str(item.get("name") or "").strip()
+        for item in (task.runtime.get("campaign_binary_reseed_targets") or [])
+        if isinstance(item, dict) and str(item.get("name") or "").strip()
+    ]
+    binary_feedback_claimed_items = [
+        dict(item)
+        for item in (task.runtime.get("binary_feedback_claimed_items") or [])
+        if isinstance(item, dict)
+    ]
+    binary_reseed_request_consumed = bool(
+        str(task.runtime.get("campaign_triggered_action_type") or "") == "binary_feedback_reseed"
+        or binary_reseed_targets
+    )
+    binary_reseed_request_source = (
+        "fabric_binary_reseed_claim"
+        if binary_feedback_claimed_items
+        else ("planning_binary_reseed_targets" if binary_reseed_request_consumed else None)
+    )
+    focus_hint = (binary_reseed_targets[0] if binary_reseed_targets else None) or initial_focus_hint or selected_target_function
+    if binary_reseed_request_consumed and binary_reseed_targets and not selected_target_function:
+        selected_target_function = binary_reseed_targets[0]
     slice_manifest_path = write_binary_slice(task_id, context)
     contamination_report = load_contamination_report(task_id)
 
@@ -467,6 +488,14 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
         "slice_manifest_path": str(slice_manifest_path),
         "selected_binary_slice_focus": focus_hint,
         "selected_target_function": selected_target_function,
+        "binary_reseed_request_consumed": binary_reseed_request_consumed,
+        "binary_reseed_request_source": binary_reseed_request_source,
+        "binary_reseed_target_names": binary_reseed_targets,
+        "binary_feedback_claimed_item_ids": [
+            str(item.get("item_id") or "")
+            for item in binary_feedback_claimed_items
+            if str(item.get("item_id") or "").strip()
+        ],
         "binary_contamination_report_path": str(Path(task.task_dir) / "runtime" / "binary_contamination_report.json"),
         "contamination_report": contamination_report,
         "seed_generation_backend": backend_used,
@@ -520,6 +549,9 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
             "selected_target": binary_target_name,
             "selected_binary_slice": str(slice_manifest_path),
             "selected_binary_slice_focus": focus_hint,
+            "binary_reseed_request_consumed": binary_reseed_request_consumed,
+            "binary_reseed_request_source": binary_reseed_request_source,
+            "binary_reseed_target_names": binary_reseed_targets,
             "binary_context_package_path": context.context_package_path,
             "binary_target_selection_manifest_path": str(Path(task.task_dir) / "binary" / "binary_target_selection_manifest.json"),
             "budget_input": {
@@ -592,6 +624,9 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
             "binary_provenance_class": ida_runtime_view.get("provenance_class"),
             "selected_binary_slice_focus": focus_hint,
             "selected_target_function": selected_target_function,
+            "binary_reseed_request_consumed": binary_reseed_request_consumed,
+            "binary_reseed_request_source": binary_reseed_request_source,
+            "binary_reseed_target_names": binary_reseed_targets,
             "seed_provenance": "binary_native_generated",
             "corpus_provenance": "binary_native_generated",
             "seed_task_mode": seed_decision.mode,

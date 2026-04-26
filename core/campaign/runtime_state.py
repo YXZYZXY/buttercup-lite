@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
 from core.analysis.loose_cluster import derive_loose_cluster_features
+from core.binary.ida_runtime_view import build_binary_ida_runtime_view
 from core.campaign.coverage_plane import (
     claim_coverage_targets_for_session,
     initialize_campaign_coverage_plane,
@@ -169,16 +171,19 @@ def _build_coverage_request_plan(selected_targets: list[dict[str, Any]]) -> dict
         grouped.setdefault(queue_kind, []).append(dict(item))
     ordering = {
         "family_confirmation": 0,
-        "binary_feedback": 1,
-        "binary_trace_admission": 2,
-        "binary_focus": 3,
-        "uncovered": 4,
-        "low_growth": 5,
-        "stalled": 6,
-        "partial_degraded": 7,
-        "harness_focus": 8,
-        "candidate_bridge": 9,
-        "coverage_gap": 10,
+        "binary_reseed": 1,
+        "binary_candidate": 2,
+        "binary_family": 3,
+        "binary_feedback": 4,
+        "binary_trace_admission": 5,
+        "binary_focus": 6,
+        "uncovered": 7,
+        "low_growth": 8,
+        "stalled": 9,
+        "partial_degraded": 10,
+        "harness_focus": 11,
+        "candidate_bridge": 12,
+        "coverage_gap": 13,
     }
     focus_groups: list[dict[str, Any]] = []
     for queue_kind, entries in sorted(
@@ -916,6 +921,7 @@ def initialize_campaign_runtime_state(
             "campaign_coverage_plane_state_path": coverage_plane_paths.get("campaign_coverage_plane_state_path"),
             "campaign_coverage_queue_path": coverage_plane_paths.get("campaign_coverage_queue_path"),
             "campaign_coverage_queue_consumption_path": str(campaign_coverage_queue_consumption_path(task_id)),
+            "binary_coverage_proxy": {},
         },
         "family_inventory": {
             "trace_exact_signatures": [],
@@ -947,6 +953,8 @@ def initialize_campaign_runtime_state(
         "binary_runtime": {
             "binary_feedback_bridge_path": None,
             "binary_ida_runtime_view_path": None,
+            "ida_fact_source": None,
+            "ida_refresh_task_id": None,
             "binary_mode": None,
             "binary_provenance": None,
             "provenance_class": None,
@@ -964,6 +972,7 @@ def initialize_campaign_runtime_state(
             "entry_candidates": [],
             "callgraph_neighbors": [],
             "contract": {},
+            "coverage_proxy": {},
         },
         "distinct_pov_names": [],
         "shared_corpus": {
@@ -1012,6 +1021,9 @@ def initialize_campaign_runtime_state(
             "distinct_pov_count": 0,
             "binary_signal_lift_count": 0,
             "binary_reseed_trigger_count": 0,
+            "binary_fabric_reseed_count": 0,
+            "binary_fabric_candidate_count": 0,
+            "binary_fabric_family_count": 0,
             "campaign_coverage_queue_count": 0,
             "campaign_low_growth_queue_count": 0,
             "campaign_uncovered_queue_count": 0,
@@ -1153,9 +1165,50 @@ def _family_focus_target_priority(item: dict[str, Any]) -> int:
     return priority
 
 
-def _binary_runtime_state_for_round(round_task_id: str) -> dict[str, Any]:
+def _binary_execution_proxy_for_round(round_task_id: str) -> dict[str, Any]:
+    execution_manifest = _read_json(task_root(round_task_id) / "runtime" / "binary_execution_manifest.json", {})
+    run_records = list(execution_manifest.get("run_records") or [])
+    execution_count = int(execution_manifest.get("run_count", len(run_records)) or 0)
+    crash_signal_count = int(execution_manifest.get("crash_candidate_count") or 0)
+    unique_inputs: set[str] = set()
+    for item in run_records:
+        if not isinstance(item, dict):
+            continue
+        raw_path = str(item.get("input_path") or "").strip()
+        if not raw_path:
+            continue
+        input_path = Path(raw_path)
+        digest = raw_path
+        if input_path.exists() and input_path.is_file():
+            try:
+                digest = hashlib.sha256(input_path.read_bytes()).hexdigest()[:16]
+            except OSError:
+                digest = raw_path
+        unique_inputs.add(digest)
+    return {
+        "execution_count": execution_count,
+        "unique_input_count": len(unique_inputs),
+        "crash_signal_rate": round(crash_signal_count / max(execution_count, 1), 6) if execution_count else 0.0,
+        "execution_signal_count": int(execution_manifest.get("execution_signal_count") or 0),
+        "crash_candidate_count": crash_signal_count,
+        "binary_execution_manifest_path": str(task_root(round_task_id) / "runtime" / "binary_execution_manifest.json"),
+    }
+
+
+def _binary_runtime_state_for_round(
+    round_task_id: str,
+    *,
+    refresh_ida: bool = False,
+    generated_at: str | None = None,
+) -> dict[str, Any]:
+    if refresh_ida:
+        try:
+            build_binary_ida_runtime_view(round_task_id, generated_at=generated_at)
+        except Exception:
+            pass
     feedback_bridge = _read_json(binary_feedback_bridge_path(round_task_id), {})
     ida_runtime_view = _read_json(binary_ida_runtime_view_path(round_task_id), {})
+    coverage_proxy = _binary_execution_proxy_for_round(round_task_id)
     trace_candidates = _dedupe_names(
         [
             {
@@ -1186,9 +1239,16 @@ def _binary_runtime_state_for_round(round_task_id: str) -> dict[str, Any]:
         ],
         limit=8,
     )
+    ida_fact_source = None
+    if ida_runtime_view:
+        ida_fact_source = "per_round_runtime_refresh" if refresh_ida else "persisted_round_runtime_view"
+    elif feedback_bridge:
+        ida_fact_source = "binary_feedback_bridge_only"
     return {
         "binary_feedback_bridge_path": str(binary_feedback_bridge_path(round_task_id)) if feedback_bridge else None,
         "binary_ida_runtime_view_path": str(binary_ida_runtime_view_path(round_task_id)) if ida_runtime_view else None,
+        "ida_fact_source": ida_fact_source,
+        "ida_refresh_task_id": round_task_id,
         "binary_mode": feedback_bridge.get("binary_mode") or ida_runtime_view.get("binary_mode"),
         "binary_provenance": feedback_bridge.get("binary_provenance") or ida_runtime_view.get("binary_provenance"),
         "provenance_class": feedback_bridge.get("provenance_class") or ida_runtime_view.get("provenance_class"),
@@ -1253,11 +1313,34 @@ def _binary_runtime_state_for_round(round_task_id: str) -> dict[str, Any]:
             limit=8,
         ),
         "contract": dict(ida_runtime_view.get("contract") or {}),
+        "coverage_proxy": coverage_proxy,
     }
 
 
-def _binary_session_feedback_inputs(state: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], str | None, dict[str, Any]]:
-    binary_runtime = dict(state.get("binary_runtime") or {})
+def _current_binary_runtime_for_planning(state: dict[str, Any], *, now_iso: str) -> dict[str, Any]:
+    cached = dict(state.get("binary_runtime") or {})
+    candidate_task_ids: list[str] = []
+    for raw_task_id in (
+        state.get("active_session_task_id"),
+        state.get("base_task_id"),
+        state.get("task_id"),
+    ):
+        task_id = str(raw_task_id or "").strip()
+        if not task_id or task_id in candidate_task_ids:
+            continue
+        candidate_task_ids.append(task_id)
+    for task_id in candidate_task_ids:
+        runtime = _binary_runtime_state_for_round(task_id, refresh_ida=True, generated_at=now_iso)
+        if runtime.get("binary_ida_runtime_view_path") or runtime.get("binary_feedback_bridge_path"):
+            return {**cached, **runtime}
+    cached.setdefault("ida_fact_source", "campaign_state_cache")
+    cached.setdefault("ida_refresh_task_id", candidate_task_ids[0] if candidate_task_ids else None)
+    cached.setdefault("coverage_proxy", {})
+    return cached
+
+
+def _binary_session_feedback_inputs(binary_runtime: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], str | None, dict[str, Any]]:
+    binary_runtime = dict(binary_runtime or {})
     feedback_targets = _dedupe_names(binary_runtime.get("reseed_candidate_queue") or [], limit=8)
     trace_targets = _dedupe_names(binary_runtime.get("trace_admission_candidates") or [], limit=8)
     focus_targets = _dedupe_names(
@@ -1307,13 +1390,18 @@ def choose_next_session_plan(
         if reuse_existing_round_task
         else ("fresh_round_clone" if target_mode != "binary" else "binary_round_clone")
     )
+    planning_binary_runtime = (
+        _current_binary_runtime_for_planning(state, now_iso=now_iso)
+        if target_mode == "binary"
+        else dict(state.get("binary_runtime") or {})
+    )
     (
         binary_feedback_targets,
         binary_trace_targets,
         binary_focus_targets,
         binary_selected_focus,
         binary_runtime,
-    ) = _binary_session_feedback_inputs(state)
+    ) = _binary_session_feedback_inputs(planning_binary_runtime)
     last_selected_harness = str(state.get("last_selected_harness") or "").strip() or None
     multiple_candidates = len(harness_pool) > 1
     coverage_plane_inputs = peek_coverage_plane_inputs(
@@ -1372,6 +1460,17 @@ def choose_next_session_plan(
         selected_harness=selected_harness_name,
         limit=8,
     )
+    binary_fabric_reseed_targets = _dedupe_names(system_feedback.get("system_binary_reseed_requests") or [], limit=8)
+    binary_fabric_candidate_targets = _dedupe_names(system_feedback.get("system_binary_candidate_targets") or [], limit=8)
+    binary_fabric_family_targets = _dedupe_names(system_feedback.get("system_binary_family_targets") or [], limit=8)
+    binary_reseed_targets = _dedupe_names(binary_fabric_reseed_targets + binary_feedback_targets, limit=8)
+    binary_candidate_targets = _dedupe_names(binary_fabric_candidate_targets + binary_trace_targets, limit=8)
+    binary_family_targets = _dedupe_names(binary_fabric_family_targets, limit=8)
+    binary_claimed_feedback_items = [
+        dict(item)
+        for item in (system_feedback.get("claimed_feedback_items") or [])
+        if str(item.get("item_type") or "") in {"binary_reseed", "binary_candidate", "binary_family"}
+    ]
     harness_switch_stagnation_threshold = 15
     override_attempted = bool(
         coverage_queue_harness_override
@@ -1476,8 +1575,9 @@ def choose_next_session_plan(
     )
     if target_mode == "binary":
         preferred_targets = (
-            binary_feedback_targets
-            or binary_trace_targets
+            binary_reseed_targets
+            or binary_candidate_targets
+            or binary_family_targets
             or binary_focus_targets
             or family_focus_targets
             or system_family_feedback_targets
@@ -1525,11 +1625,14 @@ def choose_next_session_plan(
     if session_index == 1:
         triggered_action_type = "bootstrap"
         seed_mode_override = "SEED_INIT"
-    elif target_mode == "binary" and binary_feedback_targets:
+    elif target_mode == "binary" and binary_reseed_targets:
         triggered_action_type = "binary_feedback_reseed"
         seed_mode_override = "SEED_EXPLORE"
-    elif target_mode == "binary" and binary_trace_targets:
+    elif target_mode == "binary" and binary_candidate_targets:
         triggered_action_type = "binary_trace_watchlist_followup"
+        seed_mode_override = "SEED_EXPLORE"
+    elif target_mode == "binary" and binary_family_targets:
+        triggered_action_type = "binary_family_followup"
         seed_mode_override = "SEED_EXPLORE"
     elif target_mode == "binary" and (binary_focus_targets or selected_binary_slice_focus):
         triggered_action_type = "binary_ida_focus_followup"
@@ -1611,21 +1714,33 @@ def choose_next_session_plan(
         "harness_decision_trace": harness_decision_trace,
         "seed_mode_override": seed_mode_override,
         "reseed_triggered": bool(
-            binary_feedback_targets
+            binary_reseed_targets
             if target_mode == "binary"
             else coverage_reseed_triggered
         ),
         "triggered_action_type": triggered_action_type,
         "coverage_queue_kind": (
-            "binary_feedback"
-            if target_mode == "binary" and binary_feedback_targets
+            "binary_reseed"
+            if target_mode == "binary" and binary_fabric_reseed_targets
             else (
-                "binary_trace_admission"
-                if target_mode == "binary" and binary_trace_targets
+                "binary_feedback"
+                if target_mode == "binary" and binary_feedback_targets
                 else (
-                    "binary_focus"
-                    if target_mode == "binary" and binary_focus_targets
-                    else coverage_queue_kind
+                    "binary_candidate"
+                    if target_mode == "binary" and binary_fabric_candidate_targets
+                    else (
+                        "binary_trace_admission"
+                        if target_mode == "binary" and binary_trace_targets
+                        else (
+                            "binary_family"
+                            if target_mode == "binary" and binary_family_targets
+                            else (
+                                "binary_focus"
+                                if target_mode == "binary" and binary_focus_targets
+                                else coverage_queue_kind
+                            )
+                        )
+                    )
                 )
             )
             or (
@@ -1655,11 +1770,19 @@ def choose_next_session_plan(
         "coverage_request_plan": coverage_request_plan,
         "binary_feedback_bridge_path": binary_runtime.get("binary_feedback_bridge_path"),
         "binary_ida_runtime_view_path": binary_runtime.get("binary_ida_runtime_view_path"),
-        "binary_feedback_queue_size": len(binary_feedback_targets),
-        "binary_trace_admission_count": len(binary_trace_targets),
+        "binary_feedback_queue_size": len(binary_reseed_targets),
+        "binary_trace_admission_count": len(binary_candidate_targets),
         "binary_ida_candidate_count": len(binary_focus_targets),
+        "binary_family_target_count": len(binary_family_targets),
+        "binary_feedback_claimed_items": binary_claimed_feedback_items,
+        "binary_fabric_reseed_count": len(binary_fabric_reseed_targets),
+        "binary_fabric_candidate_count": len(binary_fabric_candidate_targets),
+        "binary_fabric_family_count": len(binary_fabric_family_targets),
         "binary_provenance_class": binary_runtime.get("provenance_class"),
         "binary_feedback_action": binary_runtime.get("feedback_action"),
+        "binary_coverage_proxy": dict(binary_runtime.get("coverage_proxy") or {}),
+        "ida_fact_source": binary_runtime.get("ida_fact_source"),
+        "ida_refresh_task_id": binary_runtime.get("ida_refresh_task_id"),
         "family_stagnation_count": family_stagnation_count,
         "family_diversification_triggered": family_stalled,
         "family_confirmation_backlog_count": len(unresolved_loose_clusters),
@@ -1939,6 +2062,28 @@ def _coverage_state_for_round(round_task_id: str) -> dict[str, Any]:
     current_fraction = float(summary_payload.get("line_coverage_fraction", 0.0) or plane_snapshot.get("line_coverage_fraction") or 0.0)
     binary_signal_counts = binary_manifest.get("signal_category_counts") or {}
     binary_candidates = int(binary_manifest.get("crash_candidate_count") or 0)
+    binary_proxy = {
+        "execution_count": int(
+            (feedback_payload.get("current", {}) or {}).get("execution_count")
+            or binary_manifest.get("run_count")
+            or 0
+        ),
+        "unique_input_count": int(
+            (feedback_payload.get("current", {}) or {}).get("unique_input_count")
+            or len({str(item.get("input_path") or "") for item in (binary_manifest.get("run_records") or []) if isinstance(item, dict) and str(item.get("input_path") or "").strip()})
+        ),
+        "crash_signal_rate": float(
+            (feedback_payload.get("current", {}) or {}).get("crash_signal_rate")
+            or (
+                (
+                    int(binary_manifest.get("crash_candidate_count") or 0)
+                    / max(int(binary_manifest.get("run_count") or len(binary_manifest.get("run_records") or [])), 1)
+                )
+                if (binary_manifest.get("run_count") or len(binary_manifest.get("run_records") or []))
+                else 0.0
+            )
+        ),
+    }
     binary_signal_stalled = bool(binary_manifest) and binary_candidates <= 0 and not any(
         key not in {"informational_runtime_output", "runtime_noise"}
         for key, count in binary_signal_counts.items()
@@ -1976,6 +2121,7 @@ def _coverage_state_for_round(round_task_id: str) -> dict[str, Any]:
         "degraded_detail": plane_snapshot.get("degraded_detail"),
         "binary_signal_category_counts": binary_signal_counts,
         "binary_signal_stalled": binary_signal_stalled,
+        "binary_coverage_proxy": binary_proxy,
     }
 
 
@@ -2283,6 +2429,7 @@ def apply_round_results_to_campaign(
             "coverage_plane_snapshot_path": coverage_state.get("coverage_plane_snapshot_path"),
             "binary_signal_category_counts": coverage_state.get("binary_signal_category_counts") or {},
             "binary_signal_stalled": bool(coverage_state.get("binary_signal_stalled")),
+            "binary_coverage_proxy": dict(coverage_state.get("binary_coverage_proxy") or {}),
         }
     )
     if coverage_state.get("exact_or_partial") == "exact":
@@ -2523,6 +2670,15 @@ def apply_round_results_to_campaign(
     metrics["system_trace_worthy_candidate_count"] = int(metrics.get("system_trace_worthy_candidate_count") or 0) + int(
         system_updates.get("system_trace_worthy_new_count") or 0
     )
+    metrics["binary_fabric_reseed_count"] = int(metrics.get("binary_fabric_reseed_count") or 0) + int(
+        system_updates.get("system_binary_reseed_new_count") or 0
+    )
+    metrics["binary_fabric_candidate_count"] = int(metrics.get("binary_fabric_candidate_count") or 0) + int(
+        system_updates.get("system_binary_candidate_new_count") or 0
+    )
+    metrics["binary_fabric_family_count"] = int(metrics.get("binary_fabric_family_count") or 0) + int(
+        system_updates.get("system_binary_family_new_count") or 0
+    )
     metrics["system_low_growth_queue_count"] = int(system_updates.get("system_low_growth_queue_count") or 0)
     metrics["system_uncovered_queue_count"] = int(system_updates.get("system_uncovered_queue_count") or 0)
     metrics["system_stalled_target_count"] = int(system_updates.get("system_stalled_target_count") or 0)
@@ -2646,6 +2802,9 @@ def apply_round_results_to_campaign(
         "repro_family_manifest_path": family_inventory.get("repro_family_manifest_path"),
         "system_candidate_bridge_new_count": int(system_updates.get("system_candidate_bridge_new_count") or 0),
         "system_trace_worthy_new_count": int(system_updates.get("system_trace_worthy_new_count") or 0),
+        "system_binary_reseed_new_count": int(system_updates.get("system_binary_reseed_new_count") or 0),
+        "system_binary_candidate_new_count": int(system_updates.get("system_binary_candidate_new_count") or 0),
+        "system_binary_family_new_count": int(system_updates.get("system_binary_family_new_count") or 0),
         "system_low_growth_queue_count": int(system_updates.get("system_low_growth_queue_count") or 0),
         "system_uncovered_queue_count": int(system_updates.get("system_uncovered_queue_count") or 0),
         "system_stalled_target_count": int(system_updates.get("system_stalled_target_count") or 0),
@@ -2669,9 +2828,12 @@ def apply_round_results_to_campaign(
         "binary_feedback_action": round_binary_runtime.get("feedback_action"),
         "binary_feedback_bridge_path": round_binary_runtime.get("binary_feedback_bridge_path"),
         "binary_ida_runtime_view_path": round_binary_runtime.get("binary_ida_runtime_view_path"),
+        "ida_fact_source": round_binary_runtime.get("ida_fact_source"),
+        "ida_refresh_task_id": round_binary_runtime.get("ida_refresh_task_id"),
         "binary_trace_candidate_queue_path": round_binary_runtime.get("trace_candidate_queue_path"),
         "binary_signal_lift_total": int(round_binary_runtime.get("signal_lift_total") or 0),
         "binary_signal_lift_reason": round_binary_runtime.get("signal_lift_reason"),
+        "binary_coverage_proxy": round_binary_runtime.get("coverage_proxy") or updated_coverage_state.get("binary_coverage_proxy") or {},
         "llm_request_count_total": int(llm_metrics["request_count_total"] or 0),
         "llm_success_count": int(llm_metrics["success_count"] or 0),
         "llm_failure_count": int(llm_metrics["failure_count"] or 0),
@@ -2938,11 +3100,19 @@ def prepare_session_round_task(
         "selected_target_functions": session_plan.get("selected_target_functions") or [],
         "binary_feedback_bridge_path": session_plan.get("binary_feedback_bridge_path"),
         "binary_ida_runtime_view_path": session_plan.get("binary_ida_runtime_view_path"),
+        "ida_fact_source": session_plan.get("ida_fact_source"),
+        "ida_refresh_task_id": session_plan.get("ida_refresh_task_id"),
         "binary_feedback_queue_size": int(session_plan.get("binary_feedback_queue_size") or 0),
         "binary_trace_admission_count": int(session_plan.get("binary_trace_admission_count") or 0),
         "binary_ida_candidate_count": int(session_plan.get("binary_ida_candidate_count") or 0),
+        "binary_family_target_count": int(session_plan.get("binary_family_target_count") or 0),
+        "binary_feedback_claimed_items": session_plan.get("binary_feedback_claimed_items") or [],
+        "binary_fabric_reseed_count": int(session_plan.get("binary_fabric_reseed_count") or 0),
+        "binary_fabric_candidate_count": int(session_plan.get("binary_fabric_candidate_count") or 0),
+        "binary_fabric_family_count": int(session_plan.get("binary_fabric_family_count") or 0),
         "binary_provenance_class": session_plan.get("binary_provenance_class"),
         "binary_feedback_action": session_plan.get("binary_feedback_action"),
+        "binary_coverage_proxy": session_plan.get("binary_coverage_proxy") or {},
         "campaign_coverage_target_queue": coverage_selected_targets,
         "campaign_coverage_request_plan": session_plan.get("coverage_request_plan") or {},
         "campaign_low_growth_functions": coverage_low_growth_targets,
@@ -2950,6 +3120,9 @@ def prepare_session_round_task(
         "campaign_partial_degraded_targets": coverage_partial_targets,
         "campaign_stalled_targets": coverage_stalled_targets,
         "campaign_reseed_target_functions": coverage_selected_targets,
+        "campaign_binary_reseed_targets": session_plan.get("system_feedback_consumed", {}).get("system_binary_reseed_requests") or [],
+        "campaign_binary_candidate_targets": session_plan.get("system_feedback_consumed", {}).get("system_binary_candidate_targets") or [],
+        "campaign_binary_family_targets": session_plan.get("system_feedback_consumed", {}).get("system_binary_family_targets") or [],
         "campaign_candidate_bridge_targets": (
             session_plan.get("selected_target_functions") or []
             if session_plan.get("coverage_queue_kind") == "candidate_bridge"

@@ -119,6 +119,12 @@ def _initial_state() -> dict[str, Any]:
             "candidate_bridge_ack_count": 0,
             "family_promotion_claim_count": 0,
             "family_promotion_ack_count": 0,
+            "binary_reseed_claim_count": 0,
+            "binary_reseed_ack_count": 0,
+            "binary_candidate_claim_count": 0,
+            "binary_candidate_ack_count": 0,
+            "binary_family_claim_count": 0,
+            "binary_family_ack_count": 0,
         }
     }
 
@@ -1294,6 +1300,12 @@ class FabricStore:
                 "candidate_bridge_ack_count": 0,
                 "family_promotion_claim_count": 0,
                 "family_promotion_ack_count": 0,
+                "binary_reseed_claim_count": 0,
+                "binary_reseed_ack_count": 0,
+                "binary_candidate_claim_count": 0,
+                "binary_candidate_ack_count": 0,
+                "binary_family_claim_count": 0,
+                "binary_family_ack_count": 0,
             }
             for event in filtered_events:
                 event_type = str(event.get("event_type") or "")
