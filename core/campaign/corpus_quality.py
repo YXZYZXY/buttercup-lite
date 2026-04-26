@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from enum import Enum
 import hashlib
 from pathlib import Path
 from typing import Any
@@ -7,6 +8,8 @@ from typing import Any
 _SAMPLE_PREFIX_BYTES = 2048
 _SAMPLE_SUFFIX_BYTES = 2048
 _PRINTABLE_BYTES = set(range(32, 127)) | {9, 10, 13}
+_HASH_PREFIX_16_BYTES_HEX = 32
+MAX_CORPUS_INPUT_BYTES = 1024 * 1024
 
 _SOURCE_PRIORITY = {
     "generated_seed": 7.0,
@@ -25,6 +28,13 @@ _SOURCE_PRIORITY = {
 }
 
 
+class CorpusRejectionReason(str, Enum):
+    DUPLICATE = "DUPLICATE"
+    LOW_ENTROPY = "LOW_ENTROPY"
+    OVERSIZED = "OVERSIZED"
+    OTHER = "OTHER"
+
+
 def safe_corpus_component(value: str | None) -> str:
     raw = str(value or "").strip()
     if not raw:
@@ -41,6 +51,10 @@ def file_sha256(path: Path) -> str:
                 break
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def digest_prefix16(digest: str) -> str:
+    return str(digest or "").strip()[:_HASH_PREFIX_16_BYTES_HEX]
 
 
 def _sample_bytes(path: Path) -> bytes:
@@ -136,12 +150,16 @@ def build_corpus_entry(
     sample = _sample_bytes(path)
     stats = _sample_stats(sample)
     suffix = path.suffix or ".bin"
+    exact_digest = file_sha256(path)
+    item_id = digest_prefix16(exact_digest)
     return {
         "path": str(path),
+        "item_id": item_id,
         "name": path.name,
         "suffix": suffix,
         "file_size": int(path.stat().st_size),
-        "exact_digest": file_sha256(path),
+        "exact_digest": exact_digest,
+        "content_sha256_prefix16": item_id,
         "semantic_key": semantic_key_for_path(path),
         "quality_score": quality_score_for_path(path, source_label=source_label, priority_weight=priority_weight),
         "priority_weight": float(priority_weight if priority_weight is not None else _SOURCE_PRIORITY.get(source_label, _SOURCE_PRIORITY["unknown"])),
@@ -158,7 +176,7 @@ def build_corpus_entry(
     }
 
 
-def quality_gate_for_entry(entry: dict[str, Any]) -> tuple[bool, str | None, dict[str, Any] | None]:
+def quality_gate_for_entry(entry: dict[str, Any]) -> tuple[bool, str | None, str | None, dict[str, Any] | None]:
     file_size = int(entry.get("file_size") or 0)
     sample_size = int(entry.get("sample_size") or 0)
     unique_bytes = int(entry.get("unique_bytes") or 0)
@@ -166,23 +184,28 @@ def quality_gate_for_entry(entry: dict[str, Any]) -> tuple[bool, str | None, dic
     byte_diversity = float(entry.get("byte_diversity") or 0.0)
     dominant_byte_ratio = float(entry.get("dominant_byte_ratio") or 0.0)
     if file_size <= 0:
-        return False, "quality_gate_empty_input", {"file_size": file_size}
+        return False, CorpusRejectionReason.OTHER.value, "EMPTY_INPUT", {"file_size": file_size}
+    if file_size > MAX_CORPUS_INPUT_BYTES:
+        return False, CorpusRejectionReason.OVERSIZED.value, "FILE_SIZE_LIMIT_EXCEEDED", {
+            "file_size": file_size,
+            "max_file_size": MAX_CORPUS_INPUT_BYTES,
+        }
     if sample_size > 0 and unique_bytes <= 1:
-        return False, "quality_gate_uniform_bytes", {
+        return False, CorpusRejectionReason.LOW_ENTROPY.value, "UNIFORM_BYTES", {
             "sample_size": sample_size,
             "unique_bytes": unique_bytes,
             "zero_ratio": zero_ratio,
         }
     if sample_size >= 32 and zero_ratio >= 0.98:
-        return False, "quality_gate_zero_dominated", {
+        return False, CorpusRejectionReason.LOW_ENTROPY.value, "ZERO_DOMINATED", {
             "sample_size": sample_size,
             "zero_ratio": zero_ratio,
             "unique_bytes": unique_bytes,
         }
     if sample_size >= 64 and byte_diversity <= 0.02 and dominant_byte_ratio >= 0.98:
-        return False, "quality_gate_low_entropy_repetitive", {
+        return False, CorpusRejectionReason.LOW_ENTROPY.value, "LOW_ENTROPY_REPETITIVE", {
             "sample_size": sample_size,
             "byte_diversity": byte_diversity,
             "dominant_byte_ratio": dominant_byte_ratio,
         }
-    return True, None, None
+    return True, None, None, None

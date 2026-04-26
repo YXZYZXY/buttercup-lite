@@ -13,7 +13,11 @@ from core.campaign.coverage_plane import (
     peek_coverage_plane_inputs,
     update_coverage_plane_after_round,
 )
-from core.campaign.corpus_merger import corpus_policy, merge_corpus_layers
+from core.campaign.corpus_merger import (
+    corpus_policy,
+    merge_into_campaign_local_corpus,
+    merge_into_slot_local_corpus,
+)
 from core.campaign.corpus_quality import safe_corpus_component
 from core.seed.harness_selector import load_harness_candidates
 from core.campaign.system_fabric import (
@@ -488,11 +492,50 @@ def _corpus_stage_state_for_round(round_task_id: str) -> dict[str, Any]:
     selected_imported_count = sum(int(stage.get("selected_imported_count") or 0) for stage in stages)
     cross_lane_transfer_count = sum(int(stage.get("cross_lane_selected_count") or 0) for stage in stages)
     cross_project_transfer_count = sum(int(stage.get("cross_project_selected_count") or 0) for stage in stages)
+    imported_item_ids: list[str] = []
+    rejected_item_ids: list[str] = []
+    imported_items: list[dict[str, Any]] = []
+    rejection_reason_counts: dict[str, int] = {}
+    for stage_name, stage in (
+        ("system_stage", dict(payload.get("system_stage") or {})),
+        ("campaign_shared_stage", dict(payload.get("campaign_shared_stage") or {})),
+        ("campaign_harness_stage", dict(payload.get("campaign_harness_stage") or {})),
+    ):
+        for item in list(stage.get("selected_files") or []):
+            item_id = str(item.get("item_id") or "").strip()
+            if not item_id or str(item.get("source_label") or "") == "existing_destination":
+                continue
+            imported_item_ids.append(item_id)
+            imported_items.append(
+                {
+                    "stage": stage_name,
+                    "item_id": item_id,
+                    "origin_lane": item.get("origin_lane"),
+                    "consumer_lane": item.get("consumer_lane"),
+                    "origin_campaign_task_id": item.get("origin_campaign_task_id"),
+                    "consumer_campaign_task_id": item.get("consumer_campaign_task_id"),
+                    "import_reason": item.get("import_reason"),
+                    "source_corpus_tier": item.get("source_corpus_tier"),
+                    "consumer_corpus_tier": item.get("consumer_corpus_tier"),
+                    "cross_lane_transfer": bool(item.get("cross_lane_transfer")),
+                }
+            )
+        for item in list(stage.get("rejected_files") or []):
+            item_id = str(item.get("item_id") or "").strip()
+            if item_id:
+                rejected_item_ids.append(item_id)
+            reason = str(item.get("rejection_reason") or "").strip()
+            if reason:
+                rejection_reason_counts[reason] = rejection_reason_counts.get(reason, 0) + 1
     return {
         "stage_manifest_path": str(campaign_corpus_stage_manifest_path(round_task_id)),
         "selected_imported_count": selected_imported_count,
         "cross_lane_transfer_count": cross_lane_transfer_count,
         "cross_project_transfer_count": cross_project_transfer_count,
+        "imported_item_ids": imported_item_ids[:512],
+        "rejected_item_ids": rejected_item_ids[:512],
+        "imported_items": imported_items[:128],
+        "rejection_reason_counts": rejection_reason_counts,
         "quality_gate_passed_count": quality_gate_passed,
         "quality_gate_rejected_count": quality_gate_rejected,
         "quality_gate_pass_rate": round(
@@ -633,7 +676,7 @@ def _initial_shared_corpus(
     if not source_root.exists():
         source_root = base_active if base_active.exists() else base_binary_active
     manifest_path = campaign_corpus_merge_manifest_path(campaign_task_id)
-    return merge_corpus_layers(
+    return merge_into_campaign_local_corpus(
         shared_root,
         [
             {
@@ -649,7 +692,6 @@ def _initial_shared_corpus(
             }
         ],
         destination_kind="campaign_shared",
-        destination_scope="campaign_shared",
         destination_project=project,
         destination_lane=lane,
         destination_target_mode=target_mode,
@@ -1841,7 +1883,7 @@ def apply_round_results_to_campaign(
     shared_before = _corpus_file_count(shared_root)
     merge_manifest_path = campaign_corpus_merge_manifest_path(round_task_id)
     corpus_stage_state = _corpus_stage_state_for_round(round_task_id)
-    shared_growth = merge_corpus_layers(
+    shared_growth = merge_into_campaign_local_corpus(
         shared_root,
         [
             {
@@ -1861,7 +1903,6 @@ def apply_round_results_to_campaign(
             }
         ],
         destination_kind="campaign_shared",
-        destination_scope="campaign_shared",
         destination_project=project,
         destination_lane=lane,
         destination_target_mode=target_mode,
@@ -1872,7 +1913,7 @@ def apply_round_results_to_campaign(
         consumer_campaign_task_id=campaign_task_id,
         **corpus_policy("campaign_shared"),
     )
-    harness_growth = merge_corpus_layers(
+    harness_growth = merge_into_campaign_local_corpus(
         harness_corpus_root,
         [
             {
@@ -1892,7 +1933,6 @@ def apply_round_results_to_campaign(
             }
         ],
         destination_kind="campaign_harness",
-        destination_scope="campaign_harness",
         destination_project=project,
         destination_lane=lane,
         destination_target_mode=target_mode,
@@ -2555,7 +2595,7 @@ def prepare_session_round_task(
         round_corpus_root=round_corpus_root,
         manifest_path=stage_manifest_path.with_name("system_corpus_stage_manifest.json"),
     )
-    staged_from_shared = merge_corpus_layers(
+    staged_from_shared = merge_into_slot_local_corpus(
         round_corpus_root,
         [
             {
@@ -2572,8 +2612,6 @@ def prepare_session_round_task(
                 "selection_reason": "stage_campaign_shared_pool_into_round_active",
             }
         ],
-        destination_kind="round_local",
-        destination_scope="round_local",
         destination_project=project,
         destination_lane=lane,
         destination_target_mode=target_mode,
@@ -2585,7 +2623,7 @@ def prepare_session_round_task(
         **corpus_policy("round_local"),
     )
     staged_from_harness = (
-        merge_corpus_layers(
+        merge_into_slot_local_corpus(
             round_corpus_root,
             [
                 {
@@ -2603,8 +2641,6 @@ def prepare_session_round_task(
                     "selection_reason": "stage_campaign_harness_pool_into_round_active",
                 }
             ],
-            destination_kind="round_local",
-            destination_scope="round_local",
             destination_project=project,
             destination_lane=lane,
             destination_target_mode=target_mode,
@@ -2616,8 +2652,46 @@ def prepare_session_round_task(
             **corpus_policy("round_local"),
         )
         if harness_corpus_root
-        else {"new_files": 0, "new_bytes": 0, "cross_harness_selected_count": 0}
+        else {"new_files": 0, "new_bytes": 0, "cross_harness_selected_count": 0, "selected_files": [], "rejected_files": []}
     )
+    stage_summaries = [staged_from_system, staged_from_shared, staged_from_harness]
+    shared_to_session_import_count = sum(int(stage.get("selected_imported_count") or 0) for stage in stage_summaries)
+    shared_to_session_reject_count = sum(int(stage.get("quality_gate_rejected_count") or 0) for stage in stage_summaries)
+    shared_to_session_imported_items: list[dict[str, Any]] = []
+    shared_to_session_imported_item_ids: list[str] = []
+    shared_to_session_rejected_item_ids: list[str] = []
+    shared_to_session_cross_lane_import_count = 0
+    for stage_name, stage in (
+        ("system_stage", staged_from_system),
+        ("campaign_shared_stage", staged_from_shared),
+        ("campaign_harness_stage", staged_from_harness),
+    ):
+        for item in list(stage.get("selected_files") or []):
+            item_id = str(item.get("item_id") or "").strip()
+            if not item_id or str(item.get("source_label") or "") == "existing_destination":
+                continue
+            shared_to_session_imported_item_ids.append(item_id)
+            cross_lane_transfer = bool(item.get("cross_lane_transfer"))
+            if cross_lane_transfer:
+                shared_to_session_cross_lane_import_count += 1
+            shared_to_session_imported_items.append(
+                {
+                    "stage": stage_name,
+                    "item_id": item_id,
+                    "origin_lane": item.get("origin_lane"),
+                    "consumer_lane": item.get("consumer_lane"),
+                    "origin_campaign_task_id": item.get("origin_campaign_task_id"),
+                    "consumer_campaign_task_id": item.get("consumer_campaign_task_id"),
+                    "import_reason": item.get("import_reason"),
+                    "source_corpus_tier": item.get("source_corpus_tier"),
+                    "consumer_corpus_tier": item.get("consumer_corpus_tier"),
+                    "cross_lane_transfer": cross_lane_transfer,
+                }
+            )
+        for item in list(stage.get("rejected_files") or []):
+            item_id = str(item.get("item_id") or "").strip()
+            if item_id:
+                shared_to_session_rejected_item_ids.append(item_id)
     _write_json(
         stage_manifest_path,
         {
@@ -2629,9 +2703,21 @@ def prepare_session_round_task(
             "target_mode": target_mode,
             "selected_harness": selected_harness,
             "round_corpus_root": str(round_corpus_root),
+            "corpus_layers": {
+                "slot_local": str(round_corpus_root),
+                "campaign_local_shared": str(campaign_shared_root),
+                "campaign_local_harness": str(harness_corpus_root) if harness_corpus_root else None,
+                "system_shared_stage_manifest_path": staged_from_system.get("decision_log_path"),
+            },
             "system_stage": staged_from_system,
             "campaign_shared_stage": staged_from_shared,
             "campaign_harness_stage": staged_from_harness,
+            "shared_to_session_import_count": shared_to_session_import_count,
+            "shared_to_session_reject_count": shared_to_session_reject_count,
+            "shared_to_session_cross_lane_import_count": shared_to_session_cross_lane_import_count,
+            "shared_to_session_imported_item_ids": shared_to_session_imported_item_ids[:512],
+            "shared_to_session_rejected_item_ids": shared_to_session_rejected_item_ids[:512],
+            "shared_to_session_imported_items": shared_to_session_imported_items[:128],
         },
     )
     coverage_selected_entries = list(session_plan.get("coverage_plane_selected_entries") or [])
@@ -2736,6 +2822,10 @@ def prepare_session_round_task(
         ),
         "campaign_stage_quality_gate_pass_rate": float(staged_from_system.get("quality_gate_pass_rate") or 0.0),
         "campaign_stage_quality_gate_rejected_count": int(staged_from_system.get("quality_gate_rejected_count") or 0),
+        "campaign_shared_to_session_import_count": shared_to_session_import_count,
+        "campaign_shared_to_session_reject_count": shared_to_session_reject_count,
+        "campaign_shared_to_session_cross_lane_import_count": shared_to_session_cross_lane_import_count,
+        "campaign_shared_to_session_imported_item_ids": shared_to_session_imported_item_ids[:128],
         "campaign_stage_cross_harness_selected_count": int(
             staged_from_system.get("cross_harness_selected_count") or 0
         )

@@ -8,7 +8,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from core.campaign.corpus_merger import corpus_policy, merge_corpus_layers, system_corpus_namespace_root
+from core.campaign.corpus_merger import (
+    corpus_policy,
+    merge_into_slot_local_corpus,
+    merge_into_system_shared_corpus,
+    system_corpus_namespace_root,
+)
 from core.campaign.corpus_quality import safe_corpus_component
 from core.campaign.fabric_store import FabricStore, fabric_events_path, fabric_state_path
 from core.storage.layout import task_root, tasks_root
@@ -645,11 +650,9 @@ def stage_system_corpus(
                 "cross_project_priority_bonus": 25.0,
             }
         )
-    return merge_corpus_layers(
+    return merge_into_slot_local_corpus(
         round_corpus_root,
         layers,
-        destination_kind="round_local",
-        destination_scope="round_local",
         destination_project=project,
         destination_lane=lane,
         destination_target_mode=target_mode,
@@ -694,7 +697,7 @@ def update_after_round(
         shared_manifest_path = task_root(round_task_id) / "runtime" / "system_shared_corpus_merge_manifest.json"
         harness_manifest_path = task_root(round_task_id) / "runtime" / "system_harness_corpus_merge_manifest.json"
         compatible_manifest_path = task_root(round_task_id) / "runtime" / "system_compatible_shared_corpus_merge_manifest.json"
-        shared_growth = merge_corpus_layers(
+        shared_growth = merge_into_system_shared_corpus(
             shared_root,
             [
                 {
@@ -725,7 +728,7 @@ def update_after_round(
             consumer_campaign_task_id=campaign_task_id,
             **corpus_policy("system_shared"),
         )
-        harness_growth = merge_corpus_layers(
+        harness_growth = merge_into_system_shared_corpus(
             harness_root,
             [
                 {
@@ -766,7 +769,7 @@ def update_after_round(
             "decision_log_path": str(compatible_manifest_path),
         }
         if compatibility_group and compatible_root is not None and compatible_export_layers:
-            compatible_growth = merge_corpus_layers(
+            compatible_growth = merge_into_system_shared_corpus(
                 compatible_root,
                 compatible_export_layers,
                 destination_kind="system_shared",
