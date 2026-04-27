@@ -296,11 +296,120 @@ def _pm_entry(
     }
 
 
-def _augment_context_with_dynamic_pm_queries(task_id: str, context):
+def _filter_project_scoped_entries(
+    runtime_view: ProgramModelRuntimeView,
+    entries: list[dict[str, Any]],
+    *,
+    allow_unresolved_pseudotargets: bool = True,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    kept: list[dict[str, Any]] = []
+    removed: list[dict[str, Any]] = []
+    for item in list(entries or []):
+        if not isinstance(item, dict):
+            continue
+        if runtime_view.entry_in_task_scope(
+            item,
+            allow_unresolved_pseudotargets=allow_unresolved_pseudotargets,
+        ):
+            kept.append(dict(item))
+            continue
+        removed.append(
+            {
+                "name": item.get("name"),
+                "file": item.get("file"),
+                "reason": item.get("reason"),
+                "queue_kind": item.get("queue_kind"),
+                "eligible_pool_source": item.get("eligible_pool_source"),
+            }
+        )
+    return _ordered_unique_entries(kept), removed
+
+
+def _apply_project_scope_filter(context, runtime_view: ProgramModelRuntimeView):
+    removed_examples: dict[str, list[dict[str, Any]]] = {}
+    removed_counts: dict[str, int] = {}
+
+    def _filter_section(
+        section_name: str,
+        entries: list[dict[str, Any]],
+        *,
+        allow_unresolved_pseudotargets: bool = True,
+    ) -> list[dict[str, Any]]:
+        filtered, removed = _filter_project_scoped_entries(
+            runtime_view,
+            entries,
+            allow_unresolved_pseudotargets=allow_unresolved_pseudotargets,
+        )
+        if removed:
+            removed_counts[section_name] = len(removed)
+            removed_examples[section_name] = removed[:8]
+        return filtered
+
+    target_function = context.target_function if isinstance(context.target_function, dict) else None
+    if target_function and not runtime_view.entry_in_task_scope(
+        target_function,
+        allow_unresolved_pseudotargets=False,
+    ):
+        removed_counts["target_function"] = 1
+        removed_examples["target_function"] = [
+            {
+                "name": target_function.get("name"),
+                "file": target_function.get("file"),
+                "reason": target_function.get("reason"),
+            }
+        ]
+        context.target_function = None
+
+    context.selected_target_functions = _filter_section(
+        "selected_target_functions",
+        list(context.selected_target_functions or []),
+    )
+    context.context_package["campaign_reseed_target_entries"] = _filter_section(
+        "campaign_reseed_target_entries",
+        list((context.context_package or {}).get("campaign_reseed_target_entries") or []),
+    )
+    context.context_package["exact_uncovered_target_functions"] = _filter_section(
+        "exact_uncovered_target_functions",
+        list((context.context_package or {}).get("exact_uncovered_target_functions") or []),
+    )
+    context.context_package["family_stagnation_targets"] = _filter_section(
+        "family_stagnation_targets",
+        list((context.context_package or {}).get("family_stagnation_targets") or []),
+    )
+
+    pm_runtime_query = dict((context.context_package or {}).get("pm_runtime_query") or {})
+    if pm_runtime_query:
+        eligible_pool_entries = _filter_section(
+            "pm_runtime_query.eligible_pool_entries",
+            list(pm_runtime_query.get("eligible_pool_entries") or []),
+            allow_unresolved_pseudotargets=False,
+        )
+        pm_runtime_query["eligible_pool_entries"] = eligible_pool_entries
+        pm_runtime_query["eligible_pool_size"] = len(eligible_pool_entries)
+        source_counts: dict[str, int] = {}
+        for item in eligible_pool_entries:
+            source = str(item.get("eligible_pool_source") or "pm_runtime").strip() or "pm_runtime"
+            source_counts[source] = source_counts.get(source, 0) + 1
+        pm_runtime_query["eligible_pool_source_counts"] = source_counts
+        context.context_package["pm_runtime_query"] = pm_runtime_query
+
+    context.context_package["project_scope_filter"] = {
+        "enabled": True,
+        "removed_counts": removed_counts,
+        "removed_examples": removed_examples,
+    }
+    return context
+
+
+def _augment_context_with_dynamic_pm_queries(
+    task_id: str,
+    context,
+    runtime_view: ProgramModelRuntimeView | None = None,
+):
     target_name = str((context.target_function or {}).get("name") or "").strip()
     if not target_name:
         return context
-    runtime_view = ProgramModelRuntimeView.from_task(task_id)
+    runtime_view = runtime_view or ProgramModelRuntimeView.from_task(task_id)
     function_context = runtime_view.get_function_context(target_name)
     caller_entries = _ordered_unique_entries(
         [
@@ -856,7 +965,9 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
     coverage_manifest = _load_json(coverage_manifest_path) if coverage_manifest_path and Path(coverage_manifest_path).exists() else None
     seed_decision = select_seed_task_mode(task, coverage_manifest)
     context = retrieve_context(task_id, harness, task_mode=seed_decision.mode)
-    context = _augment_context_with_dynamic_pm_queries(task_id, context)
+    runtime_view = ProgramModelRuntimeView.from_task(task_id)
+    context = _augment_context_with_dynamic_pm_queries(task_id, context, runtime_view)
+    context = _apply_project_scope_filter(context, runtime_view)
     previous_mode_counts = dict(task.runtime.get("seed_mode_counts") or {})
     seed_mode_counts = {
         "SEED_INIT": int(previous_mode_counts.get("SEED_INIT") or 0),

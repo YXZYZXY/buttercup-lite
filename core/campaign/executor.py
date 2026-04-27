@@ -12,6 +12,7 @@ from typing import Any
 from apps.workers.binary_seed.main import process_task as process_binary_seed_task
 from apps.workers.binary_execution.main import process_task as process_binary_execution_task
 from apps.workers.fuzzer.main import process_task as process_fuzzer_task
+from apps.workers.patch.main import process_task as process_patch_task
 from apps.workers.reproducer.main import process_task as process_reproducer_task
 from apps.workers.seed.main import process_task as process_seed_task
 from apps.workers.tracer.main import process_task as process_tracer_task
@@ -864,6 +865,23 @@ def _drain_round_pipeline(task_id: str, task_store: TaskStateStore, target_mode:
             )
             logger.exception("[%s] repro stage failed", task_id)
             return False
+    while True:
+        queued_patch = queue.pop(QueueNames.PATCH, timeout=0)
+        if queued_patch is None:
+            break
+        try:
+            process_patch_task(queued_patch, task_store, queue)
+        except Exception as exc:
+            logger.exception("[%s] patch follow-up stage failed", queued_patch)
+            task_store.update_status(
+                queued_patch,
+                TaskStatus.PATCH_FAILED,
+                runtime_patch={
+                    "patch_error": str(exc),
+                    "patch_failed_at": task_store.now(),
+                    "patch_scheduler_consumption_path": "campaign_round_in_memory_queue",
+                },
+            )
     return True
 
 

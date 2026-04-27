@@ -41,6 +41,7 @@ class _ProgramModelIndex:
     task_dir: Path
     index_dir: Path
     task_src_dir: Path
+    known_source_relative_paths: set[str]
     built_at: str
     build_duration_ms: float
     signature: tuple[tuple[int, int], ...]
@@ -82,9 +83,20 @@ def _build_index(task_id: str) -> _ProgramModelIndex:
         for fact in list(query_view.function_facts or [])
         if str(fact.get("name") or "").strip()
     }
+    known_source_relative_paths: set[str] = set()
     callers_graph: dict[str, list[str]] = {}
     callees_graph: dict[str, list[str]] = {}
     for name, fact in facts_by_name.items():
+        candidate = fact.get("source_file") or fact.get("file")
+        if candidate:
+            path = Path(str(candidate))
+            if not path.is_absolute():
+                path = task_dir / path
+            parts = list(path.parts)
+            for index, part in enumerate(parts):
+                if part == "src" and index + 1 < len(parts):
+                    known_source_relative_paths.add(str(Path(*parts[index + 1 :])))
+                    break
         graph_entry = query_view.call_graph.get(name, {}) if isinstance(query_view.call_graph, dict) else {}
         callers = list(dict.fromkeys(graph_entry.get("callers") or fact.get("callers") or []))
         callees = list(dict.fromkeys(graph_entry.get("callees") or fact.get("callees") or []))
@@ -96,6 +108,7 @@ def _build_index(task_id: str) -> _ProgramModelIndex:
         task_dir=task_dir,
         index_dir=index_dir,
         task_src_dir=task_dir / "src",
+        known_source_relative_paths=known_source_relative_paths,
         built_at=time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         build_duration_ms=build_duration_ms,
         signature=_index_signature(index_dir),
@@ -160,23 +173,73 @@ class ProgramModelRuntimeView:
             path = self.index.task_dir / path
         return path
 
+    def _task_src_relative_suffix(self, path: Path) -> Path | None:
+        parts = list(path.parts)
+        for index, part in enumerate(parts):
+            if part == "src" and index + 1 < len(parts):
+                return Path(*parts[index + 1 :])
+        return None
+
+    def _normalize_to_task_src(self, path: Path | None) -> Path | None:
+        if path is None:
+            return None
+        task_src_dir = self.index.task_src_dir
+        if task_src_dir.exists():
+            try:
+                path.relative_to(task_src_dir)
+                return path
+            except ValueError:
+                pass
+        relative_suffix = self._task_src_relative_suffix(path)
+        if relative_suffix is None:
+            return None
+        candidate = task_src_dir / relative_suffix
+        if candidate.exists():
+            return candidate
+        if str(relative_suffix) in self.index.known_source_relative_paths:
+            return candidate
+        return None
+
     def _fact_in_task_src_scope(self, fact: dict[str, Any]) -> bool:
         source_file = self._fact_source_file(fact)
         if source_file is None:
             return True
-        task_src_dir = self.index.task_src_dir
-        if not task_src_dir.exists():
-            return True
-        try:
-            source_file.relative_to(task_src_dir)
-            return True
-        except ValueError:
+        return self._normalize_to_task_src(source_file) is not None
+
+    def _looks_like_scoped_pseudotarget(self, name: str) -> bool:
+        prefix = str(name or "").split(":", 1)[0].strip()
+        if not prefix:
             return False
+        return Path(prefix).suffix.lower() in {".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp"}
 
     def _scope_results(self, results: list[dict[str, Any]], *, scope_to_task_src: bool) -> list[dict[str, Any]]:
         if not scope_to_task_src:
             return results
         return [item for item in results if self._fact_in_task_src_scope(item)]
+
+    def is_name_in_task_scope(self, function_name: str | None) -> bool:
+        fact = self._fact(function_name)
+        if not fact:
+            return False
+        source_file = self._fact_source_file(fact)
+        if source_file is None:
+            return True
+        return self._normalize_to_task_src(source_file) is not None
+
+    def entry_in_task_scope(
+        self,
+        entry: dict[str, Any] | None,
+        *,
+        allow_unresolved_pseudotargets: bool = True,
+    ) -> bool:
+        if not isinstance(entry, dict):
+            return False
+        if self._fact_source_file(entry) is not None and self._fact_in_task_src_scope(entry):
+            return True
+        name = str(entry.get("name") or "").strip()
+        if name and self.is_name_in_task_scope(name):
+            return True
+        return bool(allow_unresolved_pseudotargets and self._looks_like_scoped_pseudotarget(name))
 
     def _record_query(self, query_name: str, target: Any, result_count: int, *, extra: dict[str, Any] | None = None) -> None:
         self.query_call_count += 1
@@ -406,6 +469,7 @@ class ProgramModelRuntimeView:
             "recent_queries": list(self.recent_queries),
             "function_fact_count": len(self.index.facts_by_name),
             "type_fact_count": len(self.index.type_facts),
+            "known_source_relative_path_count": len(self.index.known_source_relative_paths),
         }
 
 
