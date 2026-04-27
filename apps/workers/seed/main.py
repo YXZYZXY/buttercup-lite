@@ -302,15 +302,21 @@ def _filter_project_scoped_entries(
     *,
     allow_unresolved_pseudotargets: bool = True,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    def _entry_in_project_scope(item: dict[str, Any]) -> bool:
+        source_file = runtime_view._fact_source_file(item)
+        if source_file is not None:
+            return runtime_view._fact_in_task_src_scope(item)
+        return runtime_view.entry_in_task_scope(
+            item,
+            allow_unresolved_pseudotargets=allow_unresolved_pseudotargets,
+        )
+
     kept: list[dict[str, Any]] = []
     removed: list[dict[str, Any]] = []
     for item in list(entries or []):
         if not isinstance(item, dict):
             continue
-        if runtime_view.entry_in_task_scope(
-            item,
-            allow_unresolved_pseudotargets=allow_unresolved_pseudotargets,
-        ):
+        if _entry_in_project_scope(item):
             kept.append(dict(item))
             continue
         removed.append(
@@ -323,6 +329,18 @@ def _filter_project_scoped_entries(
             }
         )
     return _ordered_unique_entries(kept), removed
+
+
+def _strict_project_scoped_entries(
+    runtime_view: ProgramModelRuntimeView,
+    entries: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    filtered, _ = _filter_project_scoped_entries(
+        runtime_view,
+        entries,
+        allow_unresolved_pseudotargets=False,
+    )
+    return filtered
 
 
 def _apply_project_scope_filter(context, runtime_view: ProgramModelRuntimeView):
@@ -507,11 +525,22 @@ def _coverage_rotation_session_key(task) -> str:
 def _prepare_recently_used_targets(
     rotation_session_key: str | None,
     entries: list[dict[str, Any]],
+    runtime_view: ProgramModelRuntimeView,
 ) -> set[str]:
     if not rotation_session_key:
         return set()
     eligible_pool = _ELIGIBLE_TARGET_POOL_BY_ROTATION_SESSION.setdefault(rotation_session_key, {})
-    for item in entries:
+    retained_pool_entries = _strict_project_scoped_entries(
+        runtime_view,
+        list(eligible_pool.values()),
+    )
+    eligible_pool.clear()
+    for item in retained_pool_entries:
+        name = _coverage_entry_name(item)
+        if not name:
+            continue
+        eligible_pool[name] = dict(item)
+    for item in _strict_project_scoped_entries(runtime_view, entries):
         name = _coverage_entry_name(item)
         if not name:
             continue
@@ -547,21 +576,28 @@ def _eligible_rotation_pool_entries(
     *,
     rotation_session_key: str | None,
     coverage_pool: list[dict[str, Any]],
+    runtime_view: ProgramModelRuntimeView,
 ) -> list[dict[str, Any]]:
     pm_entries = _pm_runtime_target_entries(context)
-    retained_pool_entries = sorted(
-        (
-            dict(item)
-            for item in (_ELIGIBLE_TARGET_POOL_BY_ROTATION_SESSION.get(rotation_session_key) or {}).values()
+    retained_pool_entries = _strict_project_scoped_entries(
+        runtime_view,
+        sorted(
+            (
+                dict(item)
+                for item in (_ELIGIBLE_TARGET_POOL_BY_ROTATION_SESSION.get(rotation_session_key) or {}).values()
+            ),
+            key=_coverage_entry_sort_key,
         ),
-        key=_coverage_entry_sort_key,
     )
-    return _ordered_unique_entries(
-        _exact_uncovered_target_entries(context),
-        _low_growth_target_entries(context),
-        coverage_pool,
-        pm_entries,
-        retained_pool_entries,
+    return _strict_project_scoped_entries(
+        runtime_view,
+        _ordered_unique_entries(
+            _exact_uncovered_target_entries(context),
+            _low_growth_target_entries(context),
+            coverage_pool,
+            pm_entries,
+            retained_pool_entries,
+        ),
     )
 
 
@@ -581,9 +617,16 @@ def _claim_next_distinct_entry(
     return None
 
 
-def _selected_target_record_from_entry(context, entry: dict[str, Any]) -> dict[str, Any]:
+def _selected_target_record_from_entry(
+    context,
+    entry: dict[str, Any],
+    runtime_view: ProgramModelRuntimeView,
+) -> dict[str, Any]:
     name = _coverage_entry_name(entry)
     if not name:
+        return {}
+    scoped_entry = _strict_project_scoped_entries(runtime_view, [dict(entry)])
+    if not scoped_entry:
         return {}
     candidate_lists: list[list[dict[str, Any]]] = [
         [context.target_function] if isinstance(context.target_function, dict) else [],
@@ -598,7 +641,7 @@ def _selected_target_record_from_entry(context, entry: dict[str, Any]) -> dict[s
     ]
     resolved: dict[str, Any] = {}
     for candidates in candidate_lists:
-        for item in candidates:
+        for item in _strict_project_scoped_entries(runtime_view, candidates):
             if not isinstance(item, dict) or _coverage_entry_name(item) != name:
                 continue
             resolved = dict(item)
@@ -629,17 +672,25 @@ def _selected_target_record_from_entry(context, entry: dict[str, Any]) -> dict[s
     return {key: value for key, value in materialized.items() if value not in (None, "", [], {})}
 
 
-def _context_for_batch_focus(context, batch: dict[str, Any]):
+def _context_for_batch_focus(
+    context,
+    batch: dict[str, Any],
+    runtime_view: ProgramModelRuntimeView,
+):
     batch_strategy = str(batch.get("batch_strategy") or "").strip()
-    focus_entries = list(batch.get("focus_entries") or [])
+    focus_entries = _strict_project_scoped_entries(runtime_view, list(batch.get("focus_entries") or []))
     if batch_strategy == "open_ended_exploration":
         open_ended_targets = [
-            _selected_target_record_from_entry(context, item)
-            for item in _exact_uncovered_target_entries(context)[:5]
+            _selected_target_record_from_entry(context, item, runtime_view)
+            for item in _strict_project_scoped_entries(runtime_view, _exact_uncovered_target_entries(context))[:5]
         ]
         open_ended_targets = [item for item in open_ended_targets if item.get("name")]
         if not open_ended_targets:
-            open_ended_targets = [dict(item) for item in context.selected_target_functions[:5] if isinstance(item, dict)]
+            open_ended_targets = [
+                dict(item)
+                for item in _strict_project_scoped_entries(runtime_view, list(context.selected_target_functions or []))[:5]
+                if isinstance(item, dict)
+            ]
         return replace(
             context,
             target_function=None,
@@ -647,13 +698,13 @@ def _context_for_batch_focus(context, batch: dict[str, Any]):
         )
     if not focus_entries:
         return context
-    primary_target = _selected_target_record_from_entry(context, focus_entries[0])
+    primary_target = _selected_target_record_from_entry(context, focus_entries[0], runtime_view)
     primary_name = str(primary_target.get("name") or "").strip()
     if not primary_name:
         return context
     reordered_targets = [primary_target]
     seen = {primary_name}
-    for item in context.selected_target_functions:
+    for item in _strict_project_scoped_entries(runtime_view, list(context.selected_target_functions or [])):
         if not isinstance(item, dict):
             continue
         name = _coverage_entry_name(item)
@@ -676,31 +727,43 @@ def _build_coverage_request_batches(
     *,
     seed_generation_attempts: int,
     rotation_session_key: str | None = None,
+    runtime_view: ProgramModelRuntimeView,
 ) -> list[dict[str, Any]]:
-    coverage_entries = _coverage_target_entries(context)
-    exact_uncovered_entries = _exact_uncovered_target_entries(context)
-    low_growth_entries = _low_growth_target_entries(context)
-    family_stagnation_entries = _family_stagnation_target_entries(context)
-    pm_runtime_entries = _pm_runtime_target_entries(context)
+    coverage_entries = _strict_project_scoped_entries(runtime_view, _coverage_target_entries(context))
+    exact_uncovered_entries = _strict_project_scoped_entries(runtime_view, _exact_uncovered_target_entries(context))
+    low_growth_entries = _strict_project_scoped_entries(runtime_view, _low_growth_target_entries(context))
+    family_stagnation_entries = _strict_project_scoped_entries(runtime_view, _family_stagnation_target_entries(context))
+    pm_runtime_entries = _strict_project_scoped_entries(runtime_view, _pm_runtime_target_entries(context))
     ranked_coverage_entries = _ordered_unique_entries(coverage_entries)
-    coverage_pool = _ordered_unique_entries(
-        ranked_coverage_entries,
-        exact_uncovered_entries,
-        low_growth_entries,
-        pm_runtime_entries,
+    coverage_pool = _strict_project_scoped_entries(
+        runtime_view,
+        _ordered_unique_entries(
+            ranked_coverage_entries,
+            exact_uncovered_entries,
+            low_growth_entries,
+            pm_runtime_entries,
+        ),
     )
-    refill_pool = _ordered_unique_entries(
-        exact_uncovered_entries,
-        low_growth_entries,
-        ranked_coverage_entries,
-        pm_runtime_entries,
+    refill_pool = _strict_project_scoped_entries(
+        runtime_view,
+        _ordered_unique_entries(
+            exact_uncovered_entries,
+            low_growth_entries,
+            ranked_coverage_entries,
+            pm_runtime_entries,
+        ),
     )
     rotation_eligible_pool = _eligible_rotation_pool_entries(
         context,
         rotation_session_key=rotation_session_key,
         coverage_pool=coverage_pool,
+        runtime_view=runtime_view,
     )
-    recently_used_targets = _prepare_recently_used_targets(rotation_session_key, rotation_eligible_pool)
+    recently_used_targets = _prepare_recently_used_targets(
+        rotation_session_key,
+        rotation_eligible_pool,
+        runtime_view,
+    )
     if seed_decision.mode != "SEED_EXPLORE" or not (coverage_pool or family_stagnation_entries):
         return [
             {
@@ -1197,6 +1260,7 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
         seed_decision,
         seed_generation_attempts=seed_generation_attempts,
         rotation_session_key=coverage_rotation_session_key,
+        runtime_view=runtime_view,
     )
     logger.info(
         "[%s] seed request plan: mode=%s batches=%s coverage_groups=%s pm_pool=%s pm_queries=%s",
@@ -1249,7 +1313,7 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
             batch_raw_response_text = ""
             batch_llm_metadata = llm_metadata
             batch_focus_entries = list(batch.get("focus_entries") or [])
-            batch_context = _context_for_batch_focus(context, batch)
+            batch_context = _context_for_batch_focus(context, batch, runtime_view)
             logger.info(
                 "[%s] seed request batch %s/%s label=%s strategy=%s primary=%s focus=%s",
                 task_id,
