@@ -343,6 +343,87 @@ def _strict_project_scoped_entries(
     return filtered
 
 
+_SELECTOR_FUNCTION_NAME_FIELDS = {"selected_target_function"}
+_SELECTOR_FUNCTION_NAME_LIST_FIELDS = {
+    "callers",
+    "callees",
+    "campaign_reseed_targets",
+    "target_names",
+}
+
+
+def _selector_name_in_project_scope(
+    runtime_view: ProgramModelRuntimeView,
+    value: Any,
+) -> bool:
+    name = str(value or "").strip()
+    if not name:
+        return False
+    if runtime_view.is_name_in_task_scope(name):
+        return True
+    prefix = name.split(":", 1)[0].strip()
+    suffix = Path(prefix).suffix.lower()
+    if suffix not in {".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp"}:
+        return False
+    prefix_path = Path(prefix)
+    for relative_path in runtime_view.index.known_source_relative_paths:
+        candidate = Path(relative_path)
+        if str(candidate) == prefix or candidate.name == prefix_path.name:
+            return True
+    return False
+
+
+def _selector_entry_in_project_scope(
+    runtime_view: ProgramModelRuntimeView,
+    entry: dict[str, Any],
+) -> bool:
+    if runtime_view.entry_in_task_scope(
+        entry,
+        allow_unresolved_pseudotargets=False,
+    ):
+        return True
+    return _selector_name_in_project_scope(runtime_view, entry.get("name"))
+
+
+def _sanitize_selector_payload(
+    runtime_view: ProgramModelRuntimeView,
+    value: Any,
+    *,
+    field_name: str | None = None,
+) -> Any:
+    if isinstance(value, dict):
+        if isinstance(value.get("name"), str) and not _selector_entry_in_project_scope(runtime_view, value):
+            return None
+        sanitized: dict[str, Any] = {}
+        for key, item in value.items():
+            cleaned = _sanitize_selector_payload(
+                runtime_view,
+                item,
+                field_name=key,
+            )
+            if cleaned is None:
+                continue
+            sanitized[key] = cleaned
+        return sanitized
+    if isinstance(value, list):
+        sanitized_items: list[Any] = []
+        for item in value:
+            cleaned = _sanitize_selector_payload(
+                runtime_view,
+                item,
+                field_name=field_name,
+            )
+            if cleaned is None:
+                continue
+            sanitized_items.append(cleaned)
+        return sanitized_items
+    if isinstance(value, str) and field_name in _SELECTOR_FUNCTION_NAME_FIELDS:
+        return value if _selector_name_in_project_scope(runtime_view, value) else None
+    if isinstance(value, str) and field_name in _SELECTOR_FUNCTION_NAME_LIST_FIELDS:
+        return value if _selector_name_in_project_scope(runtime_view, value) else None
+    return value
+
+
 def _apply_project_scope_filter(context, runtime_view: ProgramModelRuntimeView):
     removed_examples: dict[str, list[dict[str, Any]]] = {}
     removed_counts: dict[str, int] = {}
@@ -1080,8 +1161,8 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
             "selection_rationale": context.selection_rationale or harness.reasons,
         },
     )
-    function_selector_path = write_function_selector_manifest(
-        task_id,
+    function_selector_payload = _sanitize_selector_payload(
+        runtime_view,
         {
             "task_id": task_id,
             "generated_at": task_store.now(),
@@ -1096,8 +1177,12 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
             "coverage_query_evidence": context.context_package.get("coverage_query_evidence", {}),
         },
     )
-    weighted_function_selector_path = write_weighted_function_selector_manifest(
+    function_selector_path = write_function_selector_manifest(
         task_id,
+        function_selector_payload,
+    )
+    weighted_function_selector_payload = _sanitize_selector_payload(
+        runtime_view,
         {
             "task_id": task_id,
             "generated_at": task_store.now(),
@@ -1111,6 +1196,10 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
             "coverage_feedback_manifest_path": coverage_manifest_path,
             "program_model_query_validation_manifest_path": task.runtime.get("program_model_query_validation_manifest_path"),
         },
+    )
+    weighted_function_selector_path = write_weighted_function_selector_manifest(
+        task_id,
+        weighted_function_selector_payload,
     )
     seed_family_plan = _derive_seed_family_plan(task, context, seed_decision)
     seed_family_plan_path = write_seed_family_plan_manifest(task_id, seed_family_plan)
@@ -1153,8 +1242,8 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
             ),
         },
     )
-    coverage_bridge_path = write_coverage_to_selector_bridge_manifest(
-        task_id,
+    coverage_bridge_payload = _sanitize_selector_payload(
+        runtime_view,
         {
             "task_id": task_id,
             "generated_at": task_store.now(),
@@ -1177,8 +1266,12 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
             },
         },
     )
-    selector_feedback_path = write_selector_feedback_consumption(
+    coverage_bridge_path = write_coverage_to_selector_bridge_manifest(
         task_id,
+        coverage_bridge_payload,
+    )
+    selector_feedback_payload = _sanitize_selector_payload(
+        runtime_view,
         {
             "task_id": task_id,
             "generated_at": task_store.now(),
@@ -1210,6 +1303,10 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
             ],
             "consumption_reason": seed_decision.reason,
         },
+    )
+    selector_feedback_path = write_selector_feedback_consumption(
+        task_id,
+        selector_feedback_payload,
     )
     seed_mode_semantics_path = write_seed_mode_semantics_manifest(
         task_id,
