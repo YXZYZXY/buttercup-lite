@@ -107,6 +107,15 @@ def maybe_enqueue_repro(task_id: str, task_store: TaskStateStore, queue: RedisQu
             for item in generalized_repro_eligible
             if str(item.get("candidate_id") or "").strip()
         }
+        weak_signal_candidate_ids = {
+            str(item.get("candidate_id"))
+            for item in generalized_candidate_results
+            if str(item.get("candidate_id") or "").strip()
+            and (
+                bool(item.get("weak_signal_detected"))
+                or str(item.get("trace_result_classification") or "").strip() == "weak_actionable_signal"
+            )
+        }
         suspicious_recommended = [
             payload
             for payload in traced_payloads
@@ -115,6 +124,11 @@ def maybe_enqueue_repro(task_id: str, task_store: TaskStateStore, queue: RedisQu
                 payload.get("repro_admission_recommended") is True
                 or str(payload.get("candidate_id") or "") in generalized_candidate_ids
             )
+        ]
+        weak_repro_candidates = [
+            payload
+            for payload in suspicious_recommended
+            if str(payload.get("candidate_id") or "").strip() in weak_signal_candidate_ids
         ]
         if settings.crash_source_policy == "live_raw_only":
             if not live_raw_candidates and not suspicious_recommended:
@@ -129,6 +143,7 @@ def maybe_enqueue_repro(task_id: str, task_store: TaskStateStore, queue: RedisQu
                         "repro_gate_reason": reason,
                         "generalized_candidate_trace_result_count": len(generalized_candidate_results),
                         "generalized_candidate_repro_eligible_count": len(generalized_repro_eligible),
+                        "weak_repro_candidate_count": len(weak_repro_candidates),
                     },
                 )
                 for item in generalized_candidate_results:
@@ -149,6 +164,7 @@ def maybe_enqueue_repro(task_id: str, task_store: TaskStateStore, queue: RedisQu
                     "repro_gate_reason": reason,
                     "generalized_candidate_trace_result_count": len(generalized_candidate_results),
                     "generalized_candidate_repro_eligible_count": len(generalized_repro_eligible),
+                    "weak_repro_candidate_count": len(weak_repro_candidates),
                 },
             )
             for item in generalized_candidate_results:
@@ -169,7 +185,9 @@ def maybe_enqueue_repro(task_id: str, task_store: TaskStateStore, queue: RedisQu
                 "repro_queued_at": now,
                 "repro_gate_decision": "queued",
                 "repro_gate_reason": (
-                    "recommended_suspicious_candidate_available"
+                    "weak_repro_candidate_available"
+                    if weak_repro_candidates and not live_raw_candidates
+                    else "recommended_suspicious_candidate_available"
                     if suspicious_recommended and not live_raw_candidates
                     else "stable_traced_candidate_available"
                 ),
@@ -185,6 +203,12 @@ def maybe_enqueue_repro(task_id: str, task_store: TaskStateStore, queue: RedisQu
                 ),
                 "generalized_candidate_trace_result_count": len(generalized_candidate_results),
                 "generalized_candidate_repro_eligible_count": len(generalized_repro_eligible),
+                "weak_repro_candidate_count": len(weak_repro_candidates),
+                "weak_repro_candidate_ids": [
+                    str(payload.get("candidate_id") or "")
+                    for payload in weak_repro_candidates
+                    if str(payload.get("candidate_id") or "").strip()
+                ],
             },
         )
         if suspicious_recommended and not live_raw_candidates:

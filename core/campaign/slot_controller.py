@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import signal
 import subprocess
@@ -23,6 +24,10 @@ from core.campaign.system_fabric import complete_campaign, fail_campaign, heartb
 from core.models.task import AdapterType, ExecutionMode, TaskSource, TaskSpec, TaskStatus
 from core.state.task_state import TaskStateStore
 from core.storage.layout import campaign_manifest_path, task_json_path
+from core.utils.settings import parse_bool_env
+
+
+logger = logging.getLogger("slot-controller")
 
 
 def _now() -> datetime:
@@ -464,6 +469,9 @@ class SlotController:
         round_seconds: int,
     ) -> dict[str, Any]:
         base_task_id = str(work_item.get("base_task_id") or spec.base_task_id)
+        base_payload = _read_json(task_json_path(base_task_id), {})
+        base_metadata = dict(base_payload.get("metadata") or {})
+        patch_settings = self._resolve_patch_settings(spec, work_item, base_metadata=base_metadata)
         metadata = {
             **spec.metadata,
             **dict(work_item.get("metadata") or {}),
@@ -478,8 +486,9 @@ class SlotController:
             "slot_controller_child_campaign_duration_seconds": int(child_duration),
             "SEED_GENERATION_BACKEND": spec.metadata.get("SEED_GENERATION_BACKEND", "llm"),
             "task_partition": spec.metadata.get("task_partition", "official_main"),
-            "ENABLE_PATCH_ATTEMPT": False,
-            "PATCH_DISABLED": True,
+            "ENABLE_PATCH_ATTEMPT": patch_settings["enable_patch_attempt"],
+            "PATCH_DISABLED": patch_settings["patch_disabled"],
+            "slot_controller_patch_policy_source": patch_settings["source"],
             "slot_controller_label": spec.label,
             "campaign_lane": str(work_item.get("lane") or spec.lane),
             "fabric_lane": str(work_item.get("lane") or spec.lane),
@@ -488,8 +497,6 @@ class SlotController:
         if metadata.get("campaign_lane") == "generalized":
             metadata["generalized_source"] = True
         if spec.target_mode == "binary":
-            base_payload = _read_json(task_json_path(base_task_id), {})
-            base_metadata = base_payload.get("metadata") or {}
             base_runtime = base_payload.get("runtime") or {}
             for key in (
                 "binary_mode",
@@ -501,6 +508,46 @@ class SlotController:
                 if key not in metadata and (base_metadata.get(key) or base_runtime.get(key)):
                     metadata[key] = base_metadata.get(key) or base_runtime.get(key)
         return metadata
+
+    def _resolve_patch_settings(
+        self,
+        spec: SlotSpec,
+        work_item: dict[str, Any],
+        *,
+        base_metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        layers: list[tuple[str, dict[str, Any]]] = [
+            ("base_task", dict(base_metadata or {})),
+            ("slot_spec", dict(spec.metadata or {})),
+            ("work_item", dict(work_item.get("metadata") or {})),
+        ]
+        enable_override: bool | None = None
+        enable_source = "default_disabled"
+        patch_disabled_override: bool | None = None
+        patch_disabled_source = "default_disabled"
+        for source_name, layer in layers:
+            if "ENABLE_PATCH_ATTEMPT" in layer:
+                enable_override = parse_bool_env(layer.get("ENABLE_PATCH_ATTEMPT"), default=False)
+                enable_source = source_name
+            if "PATCH_DISABLED" in layer:
+                patch_disabled_override = parse_bool_env(layer.get("PATCH_DISABLED"), default=False)
+                patch_disabled_source = source_name
+        enable_patch_attempt = bool(enable_override) if enable_override is not None else False
+        if patch_disabled_override is None:
+            patch_disabled = not enable_patch_attempt
+            source = enable_source if enable_override is not None else "default_disabled"
+        else:
+            patch_disabled = bool(patch_disabled_override)
+            source = patch_disabled_source
+        if patch_disabled:
+            enable_patch_attempt = False
+        elif enable_override is None and patch_disabled_override is not None:
+            enable_patch_attempt = True
+        return {
+            "enable_patch_attempt": enable_patch_attempt,
+            "patch_disabled": patch_disabled,
+            "source": source,
+        }
 
     def _create_campaign_task(
         self,

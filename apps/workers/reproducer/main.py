@@ -113,6 +113,8 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
     pov_paths: list[str] = []
     all_attempts: list[dict] = []
     pending_candidate_repro_updates: list[dict] = []
+    weak_repro_attempted_count = 0
+    weak_repro_result_distribution: dict[str, int] = {}
 
     for selected in family_plan.get("selected_candidates") or []:
         traced = dict(selected.get("traced_candidate") or {})
@@ -120,6 +122,23 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
         attempt_dicts = [attempt.__dict__ for attempt in attempts]
         all_attempts.extend(attempt_dicts)
         outcome = classify_reproduction_attempts(traced, attempts, selection_context=selected)
+        weak_repro_attempted = bool(
+            traced.get("candidate_origin_kind") == "suspicious_candidate"
+            and (
+                bool(traced.get("weak_signal_detected"))
+                or str(traced.get("replay_signal_classification") or "") == "weak_actionable_signal"
+            )
+        )
+        weak_repro_result = (
+            "confirmed_family"
+            if outcome.get("confirmed")
+            else str(outcome.get("blocker_reason") or "weak_repro_not_confirmed")
+        )
+        if weak_repro_attempted:
+            weak_repro_attempted_count += 1
+            weak_repro_result_distribution[weak_repro_result] = (
+                weak_repro_result_distribution.get(weak_repro_result, 0) + 1
+            )
         closure_mode = (
             "strict_live"
             if traced.get("crash_source") == "live_raw" and traced.get("trace_mode") == "live_asan"
@@ -160,6 +179,8 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
             "confirmation_level": outcome.get("confirmation_level"),
             "promotion_rule": outcome.get("promotion_rule"),
             "family_lineage": outcome.get("lineage") or {},
+            "weak_repro_attempted": weak_repro_attempted,
+            "weak_repro_result": weak_repro_result if weak_repro_attempted else None,
             "attempts": attempt_dicts,
         }
         cluster_summary = cluster_summaries.get(str(traced.get("family_loose_cluster_key") or "").strip(), {})
@@ -207,6 +228,8 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
                         "repro_gate_decision": "confirmed",
                         "repro_gate_reason": "generalized_candidate_confirmed_family",
                         "pov_path": str(pov_path),
+                        "weak_repro_attempted": weak_repro_attempted,
+                        "weak_repro_result": weak_repro_result if weak_repro_attempted else None,
                     }
                 )
         else:
@@ -218,6 +241,8 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
                         "repro_gate_decision": "blocked",
                         "repro_gate_reason": outcome.get("blocker_reason") or "generalized_candidate_repro_blocked",
                         "pov_path": None,
+                        "weak_repro_attempted": weak_repro_attempted,
+                        "weak_repro_result": weak_repro_result if weak_repro_attempted else None,
                     }
                 )
 
@@ -342,6 +367,8 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
         "family_blocked_count": len(blocked_entries),
         "family_selected_reconfirmation_count": int(family_plan.get("selected_reconfirmation_count") or 0),
         "family_confirmation_manifest_path": str(family_manifest_path),
+        "weak_repro_attempted_count": weak_repro_attempted_count,
+        "weak_repro_result_distribution": weak_repro_result_distribution,
         "fallback_trigger_reason": selected_traced.get("fallback_trigger_reason"),
         "fallback_from": selected_traced.get("fallback_from"),
         "fallback_to": selected_traced.get("fallback_to"),
@@ -356,6 +383,12 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
             repro_gate_reason=str(update.get("repro_gate_reason")),
             repro_attempt_path=str(manifest_path),
             pov_path=update.get("pov_path"),
+            weak_repro_attempted=(
+                bool(update.get("weak_repro_attempted"))
+                if update.get("weak_repro_attempted") is not None
+                else None
+            ),
+            weak_repro_result=update.get("weak_repro_result"),
         )
     if not confirmed_entries:
         task_store.update_status(
@@ -368,6 +401,8 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
                 "repro_error": "no loose-cluster candidate reached confirmed family",
                 "family_unresolved_loose_cluster_count": len(unresolved_loose_clusters),
                 "family_confirmed_family_count": 0,
+                "weak_repro_attempted_count": weak_repro_attempted_count,
+                "weak_repro_result_distribution": weak_repro_result_distribution,
                 "active_harness": active.get("name"),
             },
         )
@@ -403,6 +438,8 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
             "family_confirmed_family_keys": manifest_payload.get("confirmed_family_keys"),
             "family_confirmed_family_count": len(manifest_payload.get("confirmed_family_keys") or []),
             "family_unresolved_loose_cluster_count": len(unresolved_loose_clusters),
+            "weak_repro_attempted_count": weak_repro_attempted_count,
+            "weak_repro_result_distribution": weak_repro_result_distribution,
             "patch_selected_candidate_id": manifest_payload.get("patch_selected_candidate_id"),
             "patch_selected_family_priority": manifest_payload.get("patch_selected_family_priority"),
         },

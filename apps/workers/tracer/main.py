@@ -9,9 +9,15 @@ from pathlib import Path
 
 from core.analysis.family_confirmation import build_trace_family_manifest
 from core.analysis.suspicious_candidate import (
+    GENERALIZED_TRACE_ADMISSION_RESULT_ACTIONABLE,
+    GENERALIZED_TRACE_ADMISSION_RESULT_ADMITTED,
+    GENERALIZED_TRACE_ADMISSION_RESULT_CLAIM_REJECTED,
+    GENERALIZED_TRACE_ADMISSION_RESULT_NO_SIGNAL,
     claim_suspicious_candidates_for_trace,
     finalize_suspicious_candidate_trace,
+    requeue_claimed_suspicious_candidates_for_trace,
     record_suspicious_candidate_trace_result,
+    summarize_suspicious_candidate_admission,
     suspicious_candidate_trace_results_dir,
     suspicious_candidate_queue_path,
 )
@@ -500,6 +506,8 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
     candidate_trace_artifact_count = 0
     candidate_rejected_count = 0
     candidate_repro_eligible_count = 0
+    claimed_candidate_ids: list[str] = []
+    processed_candidate_ids: set[str] = set()
     trace_inputs: list[dict] = []
     processed_trace_inputs = 0
     trace_partial_completion = False
@@ -547,6 +555,11 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
             now_iso=task_store.now(),
         )
         candidate_claim_count = len(claimed_candidates)
+        claimed_candidate_ids = [
+            str(item.get("candidate_id") or "").strip()
+            for item in claimed_candidates
+            if str(item.get("candidate_id") or "").strip()
+        ]
         for item in claimed_candidates:
             trace_inputs.append(
                 {
@@ -708,9 +721,11 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
             break
         if best is None and candidate_origin_kind == "suspicious_candidate":
             rejection_reason = "no_replay_targets_available_for_candidate"
+            candidate_id = str(trace_input.get("candidate_id") or testcase.stem)
+            admission_events = [GENERALIZED_TRACE_ADMISSION_RESULT_CLAIM_REJECTED]
             candidate_result_payload = {
                 "task_id": task_id,
-                "candidate_id": trace_input.get("candidate_id"),
+                "candidate_id": candidate_id,
                 "candidate_origin_kind": candidate_origin_kind,
                 "candidate_reason": trace_input.get("candidate_reason"),
                 "candidate_reasons": list(trace_input.get("candidate_reasons") or []),
@@ -733,10 +748,14 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
                 "trace_claimed_at": trace_input.get("trace_claimed_at"),
                 "trace_claimed_by": trace_input.get("trace_claimed_by"),
                 "trace_state": "trace_rejected",
+                "admission_events": admission_events,
+                "admission_result": GENERALIZED_TRACE_ADMISSION_RESULT_CLAIM_REJECTED,
                 "trace_result_classification": "no_replay_targets_available",
                 "trace_rejection_reason": rejection_reason,
                 "trace_artifact_path": None,
                 "trace_completed_at": task_store.now(),
+                "weak_signal_detected": False,
+                "weak_signal_type": None,
                 "repro_admission_eligibility": "blocked",
                 "repro_admission_reason": rejection_reason,
                 "replay_attempt_count": 0,
@@ -744,12 +763,12 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
             }
             result_path = record_suspicious_candidate_trace_result(
                 task_dir,
-                candidate_id=str(trace_input.get("candidate_id") or testcase.stem),
+                candidate_id=candidate_id,
                 result_payload=candidate_result_payload,
             )
             finalize_suspicious_candidate_trace(
                 task_dir,
-                candidate_id=str(trace_input.get("candidate_id") or testcase.stem),
+                candidate_id=candidate_id,
                 trace_state="trace_rejected",
                 now_iso=task_store.now(),
                 trace_result_path=result_path,
@@ -758,9 +777,14 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
                 trace_rejection_reason=rejection_reason,
                 repro_admission_eligibility="blocked",
                 repro_admission_reason=rejection_reason,
+                admission_events=admission_events,
+                admission_result=GENERALIZED_TRACE_ADMISSION_RESULT_CLAIM_REJECTED,
+                weak_signal_detected=False,
+                weak_signal_type=None,
             )
             candidate_result_paths.append(result_path)
             candidate_rejected_count += 1
+            processed_candidate_ids.add(candidate_id)
             continue
         if best is None:
             continue
@@ -821,9 +845,17 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
             repro_admission_reason = trace_rejection_reason
 
         if candidate_origin_kind == "suspicious_candidate":
+            candidate_id = str(trace_input.get("candidate_id") or testcase.stem)
+            weak_signal_detected = str((best_signal or {}).get("classification") or "") == "weak_actionable_signal"
+            final_admission_result = (
+                GENERALIZED_TRACE_ADMISSION_RESULT_ACTIONABLE
+                if trace_artifact_path
+                else GENERALIZED_TRACE_ADMISSION_RESULT_NO_SIGNAL
+            )
+            admission_events = [GENERALIZED_TRACE_ADMISSION_RESULT_ADMITTED, final_admission_result]
             candidate_result_payload = {
                 "task_id": task_id,
-                "candidate_id": str(trace_input.get("candidate_id") or testcase.stem),
+                "candidate_id": candidate_id,
                 "candidate_origin_kind": candidate_origin_kind,
                 "candidate_reason": trace_input.get("candidate_reason"),
                 "candidate_reasons": list(trace_input.get("candidate_reasons") or []),
@@ -847,10 +879,14 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
                 "trace_claimed_at": trace_input.get("trace_claimed_at"),
                 "trace_claimed_by": trace_input.get("trace_claimed_by"),
                 "trace_state": trace_state,
+                "admission_events": admission_events,
+                "admission_result": final_admission_result,
                 "trace_result_classification": trace_result_classification,
                 "trace_rejection_reason": trace_rejection_reason,
                 "trace_artifact_path": trace_artifact_path,
                 "trace_completed_at": task_store.now(),
+                "weak_signal_detected": weak_signal_detected,
+                "weak_signal_type": traced_payload.get("signal_type"),
                 "repro_admission_eligibility": repro_admission_eligibility,
                 "repro_admission_reason": repro_admission_reason,
                 "replay_attempt_count": len(
@@ -876,12 +912,12 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
             }
             result_path = record_suspicious_candidate_trace_result(
                 task_dir,
-                candidate_id=str(trace_input.get("candidate_id") or testcase.stem),
+                candidate_id=candidate_id,
                 result_payload=candidate_result_payload,
             )
             finalize_suspicious_candidate_trace(
                 task_dir,
-                candidate_id=str(trace_input.get("candidate_id") or testcase.stem),
+                candidate_id=candidate_id,
                 trace_state=trace_state,
                 now_iso=task_store.now(),
                 trace_result_path=result_path,
@@ -890,13 +926,53 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
                 trace_rejection_reason=trace_rejection_reason,
                 repro_admission_eligibility=repro_admission_eligibility,
                 repro_admission_reason=repro_admission_reason,
+                admission_events=admission_events,
+                admission_result=final_admission_result,
+                weak_signal_detected=weak_signal_detected,
+                weak_signal_type=traced_payload.get("signal_type"),
             )
             candidate_result_paths.append(result_path)
             if repro_admission_eligibility == "eligible" and trace_artifact_path:
                 candidate_repro_eligible_count += 1
+            processed_candidate_ids.add(candidate_id)
         processed_trace_inputs += 1
         if trace_partial_completion:
             break
+
+    unprocessed_claimed_candidate_ids = [
+        candidate_id
+        for candidate_id in claimed_candidate_ids
+        if candidate_id not in processed_candidate_ids
+    ]
+    if unprocessed_claimed_candidate_ids:
+        requeue_claimed_suspicious_candidates_for_trace(
+            task_dir,
+            candidate_ids=unprocessed_claimed_candidate_ids,
+            now_iso=task_store.now(),
+            reason=(
+                "trace_budget_exhausted_before_candidate_processed"
+                if trace_partial_completion
+                else "trace_candidate_not_processed_in_current_worker_pass"
+            ),
+        )
+
+    generalized_trace_summary = (
+        summarize_suspicious_candidate_admission(task_dir)
+        if suspicious_trace_input_count or claimed_candidate_ids
+        else {
+            "candidate_queue_claim_count": 0,
+            "trace_admission_attempt_count": 0,
+            "trace_admission_result_distribution": {},
+            "trace_admission_final_result_distribution": {},
+            "trace_admission_actionable_count": 0,
+            "trace_admission_no_signal_count": 0,
+            "trace_admission_claimed_rejected_count": 0,
+            "trace_admission_result_count": 0,
+            "weak_repro_attempted_count": 0,
+            "weak_repro_result_distribution": {},
+            "admission_rate": 0.0,
+        }
+    )
 
     family_manifest = (
         build_trace_family_manifest(task_id, traced_artifacts)
@@ -947,6 +1023,15 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
         "generalized_candidate_trace_artifact_count": candidate_trace_artifact_count,
         "generalized_candidate_rejected_count": candidate_rejected_count,
         "generalized_candidate_repro_eligible_count": candidate_repro_eligible_count,
+        "trace_admission_attempt_count": int(generalized_trace_summary.get("trace_admission_attempt_count") or 0),
+        "trace_admission_result_distribution": generalized_trace_summary.get("trace_admission_result_distribution") or {},
+        "trace_admission_final_result_distribution": generalized_trace_summary.get("trace_admission_final_result_distribution") or {},
+        "trace_admission_actionable_count": int(generalized_trace_summary.get("trace_admission_actionable_count") or 0),
+        "trace_admission_no_signal_count": int(generalized_trace_summary.get("trace_admission_no_signal_count") or 0),
+        "trace_admission_claimed_rejected_count": int(generalized_trace_summary.get("trace_admission_claimed_rejected_count") or 0),
+        "weak_repro_attempted_count": int(generalized_trace_summary.get("weak_repro_attempted_count") or 0),
+        "weak_repro_result_distribution": generalized_trace_summary.get("weak_repro_result_distribution") or {},
+        "admission_rate": float(generalized_trace_summary.get("admission_rate") or 0.0),
         "symbolized_frames": symbolized_paths,
         "dedup_index_path": str(dedup_path),
         "candidate_origin": crash_source_used,
@@ -1047,6 +1132,10 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
                 "generalized_candidate_trace_artifact_count": candidate_trace_artifact_count,
                 "generalized_candidate_repro_eligible_count": candidate_repro_eligible_count,
                 "generalized_candidate_trace_results_dir": str(candidate_results_dir) if suspicious_trace_input_count else None,
+                "trace_admission_attempt_count": int(generalized_trace_summary.get("trace_admission_attempt_count") or 0),
+                "trace_admission_result_distribution": generalized_trace_summary.get("trace_admission_result_distribution") or {},
+                "trace_admission_final_result_distribution": generalized_trace_summary.get("trace_admission_final_result_distribution") or {},
+                "admission_rate": float(generalized_trace_summary.get("admission_rate") or 0.0),
                 "repro_admission_candidate_count": repro_candidate_count,
                 "why_not_promoted": why_not_promoted,
                 "trace_partial_completion": trace_partial_completion,
@@ -1087,6 +1176,10 @@ def process_task(task_id: str, task_store: TaskStateStore, queue: RedisQueue) ->
             "generalized_candidate_trace_artifact_count": candidate_trace_artifact_count,
             "generalized_candidate_repro_eligible_count": candidate_repro_eligible_count,
             "generalized_candidate_trace_results_dir": str(candidate_results_dir) if suspicious_trace_input_count else None,
+            "trace_admission_attempt_count": int(generalized_trace_summary.get("trace_admission_attempt_count") or 0),
+            "trace_admission_result_distribution": generalized_trace_summary.get("trace_admission_result_distribution") or {},
+            "trace_admission_final_result_distribution": generalized_trace_summary.get("trace_admission_final_result_distribution") or {},
+            "admission_rate": float(generalized_trace_summary.get("admission_rate") or 0.0),
             "repro_admission_candidate_count": repro_candidate_count,
             "target_mode": provenance.get("target_mode"),
             "binary_provenance": provenance.get("binary_provenance"),

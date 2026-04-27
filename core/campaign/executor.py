@@ -379,6 +379,16 @@ def _prepare_task_record(
     )
 
 
+def _campaign_round_metadata_overrides(campaign_task: TaskRecord | None) -> dict[str, Any]:
+    if campaign_task is None:
+        return {}
+    overrides: dict[str, Any] = {}
+    for key in ("ENABLE_PATCH_ATTEMPT", "PATCH_DISABLED", "slot_controller_patch_policy_source"):
+        if key in campaign_task.metadata:
+            overrides[key] = deepcopy(campaign_task.metadata.get(key))
+    return overrides
+
+
 def _prepare_source_round_task(
     *,
     base_task_id: str,
@@ -386,9 +396,12 @@ def _prepare_source_round_task(
     round_number: int,
     task_store: TaskStateStore,
     duration_seconds: int,
+    campaign_task_id: str | None = None,
     reusable_task_id: str | None = None,
 ) -> str:
     base_task = task_store.load_task(base_task_id)
+    campaign_task = task_store.load_task(campaign_task_id) if campaign_task_id else None
+    campaign_metadata_overrides = _campaign_round_metadata_overrides(campaign_task)
     if reusable_task_id:
         donor_task = task_store.load_task(reusable_task_id)
         round_root = _task_root_for_record(reusable_task_id, task_store)
@@ -396,7 +409,10 @@ def _prepare_source_round_task(
         spec = TaskSpec(
             source=TaskSource.model_validate(base_task.source.model_dump()),
             execution_mode=base_task.execution_mode,
-            metadata=deepcopy(base_task.metadata),
+            metadata={
+                **deepcopy(base_task.metadata),
+                **campaign_metadata_overrides,
+            },
         )
     else:
         donor_task = task_store.load_task(donor_task_id)
@@ -404,7 +420,10 @@ def _prepare_source_round_task(
         spec = TaskSpec(
             source=TaskSource.model_validate(base_task.source.model_dump()),
             execution_mode=base_task.execution_mode,
-            metadata=deepcopy(base_task.metadata),
+            metadata={
+                **deepcopy(base_task.metadata),
+                **campaign_metadata_overrides,
+            },
         )
         record = task_store.create_task(spec, status=TaskStatus.SEEDED)
         round_root = Path(record.task_dir)
@@ -498,6 +517,7 @@ def _prepare_source_round_task(
         if donor_task.runtime.get("seed_task_mode"):
             runtime_patch["seed_task_mode_default"] = donor_task.runtime.get("seed_task_mode")
     metadata_patch = {
+        **campaign_metadata_overrides,
         "campaign_parent_task_id": base_task_id,
         "base_task_id": base_task_id,
         "campaign_round": round_number,
@@ -1499,6 +1519,7 @@ def execute_campaign_iteration(
             round_number=round_number,
             task_store=task_store,
             duration_seconds=duration_seconds,
+            campaign_task_id=campaign_task_id,
             reusable_task_id=reusable_round_task_id,
         )
     _apply_round_scheduler_arbitration(round_task_id, task_store)

@@ -7,8 +7,19 @@ from pathlib import Path
 
 
 MAX_SUSPICIOUS_CANDIDATES = 8
-GENERALIZED_CANDIDATE_QUEUE_VERSION = 2
+GENERALIZED_CANDIDATE_QUEUE_VERSION = 3
 DEFAULT_TRACE_CLAIM_LIMIT = 5
+
+GENERALIZED_TRACE_ADMISSION_RESULT_CLAIM_REJECTED = "candidate_claimed_rejected"
+GENERALIZED_TRACE_ADMISSION_RESULT_ADMITTED = "candidate_admitted_to_trace"
+GENERALIZED_TRACE_ADMISSION_RESULT_NO_SIGNAL = "trace_no_actionable_signal"
+GENERALIZED_TRACE_ADMISSION_RESULT_ACTIONABLE = "trace_produced_actionable_signal"
+GENERALIZED_TRACE_ADMISSION_RESULTS = (
+    GENERALIZED_TRACE_ADMISSION_RESULT_CLAIM_REJECTED,
+    GENERALIZED_TRACE_ADMISSION_RESULT_ADMITTED,
+    GENERALIZED_TRACE_ADMISSION_RESULT_NO_SIGNAL,
+    GENERALIZED_TRACE_ADMISSION_RESULT_ACTIONABLE,
+)
 
 CANDIDATE_REASON_PRIORITY = {
     "stderr_crash_like_signal_present": 1000,
@@ -43,6 +54,10 @@ def suspicious_candidate_trace_results_dir(task_dir: Path) -> Path:
 
 def suspicious_candidate_trace_result_path(task_dir: Path, candidate_id: str) -> Path:
     return suspicious_candidate_trace_results_dir(task_dir) / f"{candidate_id}.json"
+
+
+def _empty_trace_admission_distribution() -> dict[str, int]:
+    return {name: 0 for name in GENERALIZED_TRACE_ADMISSION_RESULTS}
 
 
 def _load_json(path: Path) -> dict:
@@ -134,6 +149,101 @@ def _candidate_sort_key(item: dict) -> tuple[int, float, int, str, str]:
     created_at = str(item.get("created_at") or "")
     candidate_id = str(item.get("candidate_id") or "")
     return (candidate_priority, candidate_confidence, source_kind, created_at, candidate_id)
+
+
+def _normalized_admission_events(values: list[str] | None) -> list[str]:
+    events: list[str] = []
+    for value in values or []:
+        token = str(value or "").strip()
+        if token not in GENERALIZED_TRACE_ADMISSION_RESULTS or token in events:
+            continue
+        events.append(token)
+    return events
+
+
+def _infer_admission_events(item: dict) -> list[str]:
+    events = _normalized_admission_events(item.get("admission_events"))
+    if events:
+        return events
+    classification = str(item.get("trace_result_classification") or "").strip()
+    trace_artifact_path = str(item.get("trace_artifact_path") or "").strip()
+    repro_eligibility = str(item.get("repro_admission_eligibility") or "").strip()
+    trace_state = str(item.get("trace_state") or item.get("admission_state") or "").strip()
+    if classification == "no_replay_targets_available":
+        return [GENERALIZED_TRACE_ADMISSION_RESULT_CLAIM_REJECTED]
+    if trace_artifact_path or repro_eligibility == "eligible":
+        return [
+            GENERALIZED_TRACE_ADMISSION_RESULT_ADMITTED,
+            GENERALIZED_TRACE_ADMISSION_RESULT_ACTIONABLE,
+        ]
+    if trace_state in {"trace_completed", "trace_rejected"} or classification:
+        return [
+            GENERALIZED_TRACE_ADMISSION_RESULT_ADMITTED,
+            GENERALIZED_TRACE_ADMISSION_RESULT_NO_SIGNAL,
+        ]
+    if str(item.get("trace_claimed_at") or "").strip():
+        return [GENERALIZED_TRACE_ADMISSION_RESULT_ADMITTED]
+    return []
+
+
+def _infer_final_admission_result(item: dict) -> str | None:
+    admission_result = str(item.get("admission_result") or "").strip()
+    if admission_result in GENERALIZED_TRACE_ADMISSION_RESULTS:
+        return admission_result
+    events = _infer_admission_events(item)
+    return events[-1] if events else None
+
+
+def summarize_suspicious_candidate_admission(task_dir: Path) -> dict:
+    queue_payload = load_suspicious_candidate_queue(task_dir)
+    result_payloads = [
+        item
+        for item in load_candidate_trace_results(task_dir)
+        if str(item.get("candidate_origin_kind") or "") == "suspicious_candidate"
+    ]
+    distribution = _empty_trace_admission_distribution()
+    final_distribution = _empty_trace_admission_distribution()
+    trace_admission_attempt_count = 0
+    actionable_count = 0
+    no_signal_count = 0
+    claimed_rejected_count = 0
+    weak_repro_attempted_count = 0
+    weak_repro_result_distribution: dict[str, int] = {}
+    for item in result_payloads:
+        events = _infer_admission_events(item)
+        final_result = _infer_final_admission_result(item)
+        for event in events:
+            distribution[event] = distribution.get(event, 0) + 1
+        if GENERALIZED_TRACE_ADMISSION_RESULT_ADMITTED in events:
+            trace_admission_attempt_count += 1
+        if final_result:
+            final_distribution[final_result] = final_distribution.get(final_result, 0) + 1
+        if final_result == GENERALIZED_TRACE_ADMISSION_RESULT_ACTIONABLE:
+            actionable_count += 1
+        elif final_result == GENERALIZED_TRACE_ADMISSION_RESULT_NO_SIGNAL:
+            no_signal_count += 1
+        elif final_result == GENERALIZED_TRACE_ADMISSION_RESULT_CLAIM_REJECTED:
+            claimed_rejected_count += 1
+        if bool(item.get("weak_repro_attempted")):
+            weak_repro_attempted_count += 1
+            weak_repro_result = str(item.get("weak_repro_result") or "attempted_without_result").strip()
+            weak_repro_result_distribution[weak_repro_result] = (
+                weak_repro_result_distribution.get(weak_repro_result, 0) + 1
+            )
+    admission_rate = round(actionable_count / max(trace_admission_attempt_count, 1), 6)
+    return {
+        "candidate_queue_claim_count": int(queue_payload.get("candidate_claim_count") or 0),
+        "trace_admission_attempt_count": trace_admission_attempt_count,
+        "trace_admission_result_distribution": distribution,
+        "trace_admission_final_result_distribution": final_distribution,
+        "trace_admission_actionable_count": actionable_count,
+        "trace_admission_no_signal_count": no_signal_count,
+        "trace_admission_claimed_rejected_count": claimed_rejected_count,
+        "trace_admission_result_count": len(result_payloads),
+        "weak_repro_attempted_count": weak_repro_attempted_count,
+        "weak_repro_result_distribution": weak_repro_result_distribution,
+        "admission_rate": admission_rate,
+    }
 
 
 def _signal_lines(signal_summary: dict, key: str) -> list[str]:
@@ -348,10 +458,16 @@ def build_suspicious_candidate_queue(
             "trace_artifact_path": None,
             "trace_rejection_reason": None,
             "trace_result_classification": None,
+            "admission_events": [],
+            "admission_result": None,
             "trace_completed_at": None,
+            "weak_signal_detected": False,
+            "weak_signal_type": None,
             "repro_gate_decision": None,
             "repro_gate_reason": None,
             "repro_attempt_path": None,
+            "weak_repro_attempted": False,
+            "weak_repro_result": None,
             "pov_path": None,
         }
         items.append(item)
@@ -504,8 +620,39 @@ def load_candidate_trace_results(task_dir: Path) -> list[dict]:
         except json.JSONDecodeError:
             continue
         payload.setdefault("trace_result_path", str(path))
+        payload.setdefault("admission_events", _infer_admission_events(payload))
+        payload.setdefault("admission_result", _infer_final_admission_result(payload))
+        payload.setdefault("weak_signal_detected", bool(payload.get("weak_signal_type")))
+        payload.setdefault("weak_signal_type", payload.get("signal_type"))
+        payload.setdefault("weak_repro_attempted", False)
+        payload.setdefault("weak_repro_result", None)
         results.append(payload)
     return results
+
+
+def requeue_claimed_suspicious_candidates_for_trace(
+    task_dir: Path,
+    *,
+    candidate_ids: list[str],
+    now_iso: str,
+    reason: str,
+) -> None:
+    if not candidate_ids:
+        return
+    payload = load_suspicious_candidate_queue(task_dir)
+    selected = {str(candidate_id).strip() for candidate_id in candidate_ids if str(candidate_id).strip()}
+    if not selected:
+        return
+    for item in payload.get("items") or []:
+        if str(item.get("candidate_id") or "").strip() not in selected:
+            continue
+        if str(item.get("admission_state") or "").strip() != "claimed_for_trace":
+            continue
+        item["admission_state"] = "requeued_for_trace"
+        item["trace_rejection_reason"] = reason
+        item["trace_requeued_at"] = now_iso
+    _refresh_candidate_queue_counters(payload)
+    _write_json(suspicious_candidate_queue_path(task_dir), payload)
 
 
 def finalize_suspicious_candidate_trace(
@@ -520,6 +667,10 @@ def finalize_suspicious_candidate_trace(
     trace_rejection_reason: str | None,
     repro_admission_eligibility: str,
     repro_admission_reason: str,
+    admission_events: list[str] | None = None,
+    admission_result: str | None = None,
+    weak_signal_detected: bool | None = None,
+    weak_signal_type: str | None = None,
 ) -> None:
     payload = load_suspicious_candidate_queue(task_dir)
     for item in payload.get("items") or []:
@@ -530,7 +681,27 @@ def finalize_suspicious_candidate_trace(
         item["trace_artifact_path"] = trace_artifact_path
         item["trace_rejection_reason"] = trace_rejection_reason
         item["trace_result_classification"] = trace_result_classification
+        item["admission_events"] = _normalized_admission_events(admission_events) or _infer_admission_events(
+            {
+                "trace_result_classification": trace_result_classification,
+                "trace_artifact_path": trace_artifact_path,
+                "repro_admission_eligibility": repro_admission_eligibility,
+                "trace_state": trace_state,
+            }
+        )
+        normalized_result = str(admission_result or "").strip()
+        item["admission_result"] = (
+            normalized_result
+            if normalized_result in GENERALIZED_TRACE_ADMISSION_RESULTS
+            else _infer_final_admission_result(item)
+        )
         item["trace_completed_at"] = now_iso
+        item["weak_signal_detected"] = (
+            bool(weak_signal_detected)
+            if weak_signal_detected is not None
+            else bool(weak_signal_type)
+        )
+        item["weak_signal_type"] = weak_signal_type
         item["repro_admission_eligibility"] = repro_admission_eligibility
         item["repro_admission_reason"] = repro_admission_reason
         break
@@ -546,6 +717,8 @@ def record_suspicious_candidate_repro_status(
     repro_gate_reason: str,
     repro_attempt_path: str | None = None,
     pov_path: str | None = None,
+    weak_repro_attempted: bool | None = None,
+    weak_repro_result: str | None = None,
 ) -> None:
     result_path = suspicious_candidate_trace_result_path(task_dir, candidate_id)
     if result_path.exists():
@@ -554,6 +727,10 @@ def record_suspicious_candidate_repro_status(
         payload["repro_gate_reason"] = repro_gate_reason
         payload["repro_attempt_path"] = repro_attempt_path
         payload["pov_path"] = pov_path
+        if weak_repro_attempted is not None:
+            payload["weak_repro_attempted"] = bool(weak_repro_attempted)
+        if weak_repro_result is not None:
+            payload["weak_repro_result"] = weak_repro_result
         _write_json(result_path, payload)
 
     queue_payload = load_suspicious_candidate_queue(task_dir)
@@ -564,6 +741,10 @@ def record_suspicious_candidate_repro_status(
         item["repro_gate_reason"] = repro_gate_reason
         item["repro_attempt_path"] = repro_attempt_path
         item["pov_path"] = pov_path
+        if weak_repro_attempted is not None:
+            item["weak_repro_attempted"] = bool(weak_repro_attempted)
+        if weak_repro_result is not None:
+            item["weak_repro_result"] = weak_repro_result
         break
     if queue_payload:
         _refresh_candidate_queue_counters(queue_payload)
@@ -588,6 +769,20 @@ def _refresh_candidate_queue_counters(payload: dict) -> None:
     payload["candidate_repro_eligible_count"] = sum(
         1 for item in items if item.get("repro_admission_eligibility") == "eligible"
     )
+    admission_summary = {
+        "distribution": _empty_trace_admission_distribution(),
+        "final_distribution": _empty_trace_admission_distribution(),
+    }
+    for item in items:
+        for event in _infer_admission_events(item):
+            admission_summary["distribution"][event] = admission_summary["distribution"].get(event, 0) + 1
+        final_result = _infer_final_admission_result(item)
+        if final_result:
+            admission_summary["final_distribution"][final_result] = (
+                admission_summary["final_distribution"].get(final_result, 0) + 1
+            )
+    payload["trace_admission_result_distribution"] = admission_summary["distribution"]
+    payload["trace_admission_final_result_distribution"] = admission_summary["final_distribution"]
 
 
 def _upgrade_legacy_candidate_queue(task_dir: Path, payload: dict) -> dict:
@@ -660,10 +855,16 @@ def _upgrade_legacy_candidate_queue(task_dir: Path, payload: dict) -> dict:
         item.setdefault("trace_artifact_path", None)
         item.setdefault("trace_rejection_reason", None)
         item.setdefault("trace_result_classification", None)
+        item.setdefault("admission_events", _infer_admission_events(item))
+        item.setdefault("admission_result", _infer_final_admission_result(item))
         item.setdefault("trace_completed_at", None)
+        item.setdefault("weak_signal_detected", bool(item.get("weak_signal_type")))
+        item.setdefault("weak_signal_type", item.get("signal_type"))
         item.setdefault("repro_gate_decision", None)
         item.setdefault("repro_gate_reason", None)
         item.setdefault("repro_attempt_path", None)
+        item.setdefault("weak_repro_attempted", False)
+        item.setdefault("weak_repro_result", None)
         item.setdefault("pov_path", None)
     payload["items"] = sorted(payload.get("items") or [], key=_candidate_sort_key, reverse=True)
     _refresh_candidate_queue_counters(payload)

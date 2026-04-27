@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
 from core.analysis.loose_cluster import derive_loose_cluster_features
+from core.analysis.suspicious_candidate import summarize_suspicious_candidate_admission
 from core.binary.ida_runtime_view import build_binary_ida_runtime_view
 from core.campaign.coverage_plane import (
     claim_coverage_targets_for_session,
@@ -980,6 +981,22 @@ def initialize_campaign_runtime_state(
             "contract": {},
             "coverage_proxy": {},
         },
+        "generalized_trace_admission": {
+            "candidate_queue_claim_count": 0,
+            "trace_admission_attempt_count": 0,
+            "trace_admission_result_distribution": {},
+            "trace_admission_final_result_distribution": {},
+            "trace_admission_actionable_count": 0,
+            "trace_admission_no_signal_count": 0,
+            "trace_admission_claimed_rejected_count": 0,
+            "weak_repro_attempted_count": 0,
+            "weak_repro_result_distribution": {},
+            "admission_rate": 0.0,
+            "last_selected_target_function": None,
+            "last_selected_harness": None,
+            "planning_effect": None,
+            "updated_at": None,
+        },
         "distinct_pov_names": [],
         "shared_corpus": {
             "root": str(campaign_shared_corpus_path(task_id)),
@@ -1015,6 +1032,12 @@ def initialize_campaign_runtime_state(
             "family_diversification_trigger_count": 0,
             "generalized_candidate_bridge_count": 0,
             "trace_worthy_candidate_count": 0,
+            "generalized_candidate_claim_count": 0,
+            "generalized_trace_admission_attempt_count": 0,
+            "generalized_trace_actionable_count": 0,
+            "generalized_trace_no_signal_count": 0,
+            "generalized_trace_admission_rate": 0.0,
+            "weak_repro_attempted_count": 0,
             "trace_exact_signature_count": 0,
             "loose_cluster_count": 0,
             "confirmed_family_count": 0,
@@ -1748,6 +1771,14 @@ def choose_next_session_plan(
         coverage_claim,
         coverage_stalled=coverage_stalled,
     )
+    generalized_trace_admission = dict(state.get("generalized_trace_admission") or {})
+    generalized_admission_rate = float(generalized_trace_admission.get("admission_rate") or 0.0)
+    generalized_actionable_count = int(
+        generalized_trace_admission.get("trace_admission_actionable_count") or 0
+    )
+    generalized_no_signal_count = int(
+        generalized_trace_admission.get("trace_admission_no_signal_count") or 0
+    )
     seed_mode_trigger_source: str | None = None
     seed_mode_trigger_reason: str | None = None
 
@@ -1794,6 +1825,25 @@ def choose_next_session_plan(
         seed_mode_override = "SEED_EXPLORE"
         seed_mode_trigger_source = "family_confirmation"
         seed_mode_trigger_reason = "single_confirmed_family_keep_exploring"
+    elif target_mode != "binary" and generalized_actionable_count > 0:
+        triggered_action_type = "generalized_trace_actionable_followup"
+        seed_mode_override = "VULN_DISCOVERY"
+        seed_mode_trigger_source = "generalized_trace_admission"
+        seed_mode_trigger_reason = (
+            f"actionable_signal_count={generalized_actionable_count},admission_rate={generalized_admission_rate}"
+        )
+    elif (
+        target_mode != "binary"
+        and generalized_no_signal_count > 0
+        and generalized_actionable_count == 0
+        and candidate_bridge_queue
+    ):
+        triggered_action_type = "generalized_trace_no_signal_backoff"
+        seed_mode_override = "SEED_EXPLORE"
+        seed_mode_trigger_source = "generalized_trace_admission"
+        seed_mode_trigger_reason = (
+            f"no_actionable_signal_count={generalized_no_signal_count},admission_rate={generalized_admission_rate}"
+        )
     elif coverage_target_stalled:
         triggered_action_type = "coverage_target_stall_followup"
         seed_mode_override = "SEED_EXPLORE"
@@ -1949,6 +1999,10 @@ def choose_next_session_plan(
         ],
         "family_promotion_blockers": promotion_blockers[-8:],
         "candidate_bridge_queue_size": len(candidate_bridge_queue),
+        "generalized_trace_admission": generalized_trace_admission,
+        "generalized_trace_admission_rate": generalized_admission_rate,
+        "generalized_trace_actionable_count": generalized_actionable_count,
+        "generalized_trace_no_signal_count": generalized_no_signal_count,
         "started_at": now_iso,
         "selection_score": best_score,
     }
@@ -2746,10 +2800,67 @@ def apply_round_results_to_campaign(
     metrics["campaign_partial_queue_count"] = int(plane_update.get("campaign_partial_queue_count") or 0)
     metrics["campaign_stalled_queue_count"] = int(plane_update.get("campaign_stalled_queue_count") or 0)
     metrics["system_coverage_plane_queue_count"] = int(plane_update.get("system_coverage_queue_count") or 0)
+    generalized_trace_admission = (
+        summarize_suspicious_candidate_admission(round_root)
+        if target_mode != "binary"
+        else {
+            "candidate_queue_claim_count": 0,
+            "trace_admission_attempt_count": 0,
+            "trace_admission_result_distribution": {},
+            "trace_admission_final_result_distribution": {},
+            "trace_admission_actionable_count": 0,
+            "trace_admission_no_signal_count": 0,
+            "trace_admission_claimed_rejected_count": 0,
+            "weak_repro_attempted_count": 0,
+            "weak_repro_result_distribution": {},
+            "admission_rate": 0.0,
+        }
+    )
+    metrics["generalized_candidate_claim_count"] = int(
+        metrics.get("generalized_candidate_claim_count") or 0
+    ) + int(generalized_trace_admission.get("candidate_queue_claim_count") or 0)
+    metrics["generalized_trace_admission_attempt_count"] = int(
+        metrics.get("generalized_trace_admission_attempt_count") or 0
+    ) + int(generalized_trace_admission.get("trace_admission_attempt_count") or 0)
+    metrics["generalized_trace_actionable_count"] = int(
+        metrics.get("generalized_trace_actionable_count") or 0
+    ) + int(generalized_trace_admission.get("trace_admission_actionable_count") or 0)
+    metrics["generalized_trace_no_signal_count"] = int(
+        metrics.get("generalized_trace_no_signal_count") or 0
+    ) + int(generalized_trace_admission.get("trace_admission_no_signal_count") or 0)
+    metrics["weak_repro_attempted_count"] = int(
+        metrics.get("weak_repro_attempted_count") or 0
+    ) + int(generalized_trace_admission.get("weak_repro_attempted_count") or 0)
+    metrics["generalized_trace_admission_rate"] = float(
+        generalized_trace_admission.get("admission_rate") or 0.0
+    )
 
     candidate_bridge_queue = list(state.get("candidate_bridge_queue") or [])
     candidate_bridge_triggered = False
     trace_worthy_candidate_count = 0
+    generalized_target_name = str(round_record.get("selected_target_function") or "").strip()
+    generalized_actionable_count = int(
+        generalized_trace_admission.get("trace_admission_actionable_count") or 0
+    )
+    generalized_no_signal_count = int(
+        generalized_trace_admission.get("trace_admission_no_signal_count") or 0
+    )
+    generalized_claim_count = int(
+        generalized_trace_admission.get("candidate_queue_claim_count") or 0
+    )
+    generalized_planning_effect = "no_generalized_trace_feedback"
+    if target_mode != "binary" and generalized_claim_count > 0:
+        if generalized_actionable_count > 0:
+            generalized_planning_effect = "actionable_signal_promoted_to_vuln_discovery"
+        elif generalized_no_signal_count > 0 and generalized_target_name:
+            candidate_bridge_queue = [
+                item
+                for item in candidate_bridge_queue
+                if str(item.get("name") or "").strip() != generalized_target_name
+            ]
+            generalized_planning_effect = "no_actionable_signal_target_removed_from_candidate_bridge"
+        else:
+            generalized_planning_effect = "generalized_trace_feedback_recorded"
     if target_mode != "binary" and not family_progress:
         low_queue = updated_coverage_state.get("low_growth_function_queue") or []
         uncovered_queue = updated_coverage_state.get("uncovered_function_queue") or []
@@ -2769,6 +2880,8 @@ def apply_round_results_to_campaign(
                 or uncovered_queue
             )
         )
+        if generalized_claim_count > 0 and generalized_actionable_count == 0:
+            should_bridge = False
         if should_bridge:
             candidate_bridge_triggered = True
             trace_worthy = bool(coverage_state.get("coverage_stalled") or family_stagnation_count >= 2 or low_queue)
@@ -2793,6 +2906,15 @@ def apply_round_results_to_campaign(
     else:
         candidate_bridge_queue = candidate_bridge_queue[-12:]
     state["candidate_bridge_queue"] = candidate_bridge_queue
+    state["generalized_trace_admission"] = {
+        **dict(state.get("generalized_trace_admission") or {}),
+        **generalized_trace_admission,
+        "last_selected_target_function": generalized_target_name or state.get("last_selected_target_function"),
+        "last_selected_harness": selected_harness,
+        "planning_effect": generalized_planning_effect,
+        "updated_at": now_iso,
+        "round_task_id": round_task_id,
+    }
 
     previous_harness = str(state.get("last_selected_harness") or "").strip() or None
     if previous_harness and previous_harness != selected_harness:
@@ -3048,6 +3170,27 @@ def apply_round_results_to_campaign(
         "candidate_bridge_triggered": candidate_bridge_triggered,
         "candidate_bridge_count": len(candidate_bridge_queue),
         "trace_worthy_candidate_count": trace_worthy_candidate_count,
+        "generalized_candidate_claim_count": generalized_claim_count,
+        "generalized_trace_admission_attempt_count": int(
+            generalized_trace_admission.get("trace_admission_attempt_count") or 0
+        ),
+        "generalized_trace_admission_rate": float(
+            generalized_trace_admission.get("admission_rate") or 0.0
+        ),
+        "generalized_trace_admission_result_distribution": generalized_trace_admission.get(
+            "trace_admission_result_distribution"
+        )
+        or {},
+        "generalized_trace_admission_final_result_distribution": generalized_trace_admission.get(
+            "trace_admission_final_result_distribution"
+        )
+        or {},
+        "generalized_trace_actionable_count": generalized_actionable_count,
+        "generalized_trace_no_signal_count": generalized_no_signal_count,
+        "generalized_trace_planning_effect": generalized_planning_effect,
+        "weak_repro_attempted_count": int(
+            generalized_trace_admission.get("weak_repro_attempted_count") or 0
+        ),
         "trace_family_manifest_path": family_inventory.get("trace_family_manifest_path"),
         "repro_family_manifest_path": family_inventory.get("repro_family_manifest_path"),
         "system_candidate_bridge_new_count": int(system_updates.get("system_candidate_bridge_new_count") or 0),
@@ -3346,6 +3489,16 @@ def prepare_session_round_task(
         "campaign_family_confirmation_selected_clusters": session_plan.get("family_confirmation_selected_clusters") or [],
         "campaign_family_promotion_blockers": session_plan.get("family_promotion_blockers") or [],
         "campaign_candidate_bridge_queue_size": int(session_plan.get("candidate_bridge_queue_size") or 0),
+        "campaign_generalized_trace_admission": session_plan.get("generalized_trace_admission") or {},
+        "campaign_generalized_trace_admission_rate": float(
+            session_plan.get("generalized_trace_admission_rate") or 0.0
+        ),
+        "campaign_generalized_trace_actionable_count": int(
+            session_plan.get("generalized_trace_actionable_count") or 0
+        ),
+        "campaign_generalized_trace_no_signal_count": int(
+            session_plan.get("generalized_trace_no_signal_count") or 0
+        ),
         "harness_decision_trace": session_plan.get("harness_decision_trace") or {},
         "selected_harness": selected_harness,
         "selected_target": selected_harness,
@@ -3487,6 +3640,7 @@ def write_campaign_runtime_artifacts(
         },
         "family_diversification": state.get("family_diversification") or {},
         "candidate_bridge_queue": state.get("candidate_bridge_queue") or [],
+        "generalized_trace_admission": state.get("generalized_trace_admission") or {},
         "continuous_fuzzing": {
             "continuity_mode": state.get("session_continuity_mode"),
             "active_session_task_id": state.get("active_session_task_id"),
