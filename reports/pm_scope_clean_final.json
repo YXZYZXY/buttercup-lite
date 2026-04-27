@@ -1,0 +1,1594 @@
+{
+  "generated_at": "2026-04-27T12:55:35.527340+00:00",
+  "report_name": "pm_scope_clean_final",
+  "phase0": {
+    "disk_available_root": "120G",
+    "meets_requirement_ge_100_gib": true
+  },
+  "llm_endpoint_verification": {
+    "status": "pass",
+    "http_status": 200,
+    "provider": "api.deepseek.com",
+    "base_url": "https://api.deepseek.com",
+    "model": "deepseek-v4-flash",
+    "real_call_verified": true,
+    "request_id_hash_prefix": "41de9f1aad57"
+  },
+  "run": {
+    "run_root": "/home/buttercup2/Project/buttercup-lite/runtime/proof_runs/20260427T203608+0800_pm_scope_clean_final_15m/slot_controller",
+    "slot_started_at": "2026-04-27T12:40:18.457048+00:00",
+    "slot_deadline_at": "2026-04-27T12:55:18.457048+00:00",
+    "finished_at": "2026-04-27T12:55:35.527340+00:00",
+    "totals": {
+      "llm_request_count_total": 16,
+      "llm_success_count": 7,
+      "llm_failure_count": 0,
+      "fuzz_session_count": 7,
+      "harness_switch_count": 0,
+      "reseed_trigger_count": 7,
+      "shared_corpus_growth_count": 844,
+      "family_diversification_trigger_count": 4,
+      "generalized_candidate_bridge_count": 2,
+      "trace_worthy_candidate_count": 2,
+      "trace_exact_signature_count": 2,
+      "loose_cluster_count": 4,
+      "confirmed_family_count": 4,
+      "warmup_prepared_count": 2,
+      "warmup_utilized_count": 1,
+      "slot_switch_latency_count": 1,
+      "slot_switch_latency_seconds_total": 85.629,
+      "api_calls_per_hour": 62.86,
+      "wall_clock_utilization_ratio": 0.9946,
+      "idle_gap_seconds": 137.232,
+      "idle_gap_total_seconds": 137.232,
+      "slot_switch_latency_seconds_avg": 85.629
+    },
+    "fabric_summary": {
+      "claims_total": 16,
+      "completed_total": 15,
+      "failed_total": 1,
+      "requeued_total": 0,
+      "continuations_total": 1,
+      "nacked_total": 0,
+      "dead_letter_total": 0,
+      "recovered_total": 0,
+      "campaign_claim_count": 2,
+      "campaign_ack_count": 2,
+      "continuation_claim_count": 1,
+      "continuation_ack_count": 1,
+      "coverage_claim_count": 5,
+      "coverage_ack_count": 5,
+      "candidate_bridge_claim_count": 3,
+      "candidate_bridge_ack_count": 3,
+      "family_promotion_claim_count": 5,
+      "family_promotion_ack_count": 5,
+      "binary_reseed_claim_count": 0,
+      "binary_reseed_ack_count": 0,
+      "binary_candidate_claim_count": 0,
+      "binary_candidate_ack_count": 0,
+      "binary_family_claim_count": 0,
+      "binary_family_ack_count": 0
+    }
+  },
+  "slots": {
+    "expat_generalized": {
+      "seed_task_id": "bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9",
+      "seed_root": "/home/buttercup2/Project/buttercup-lite/data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed",
+      "log_path": "/home/buttercup2/Project/buttercup-lite/runtime/proof_runs/20260427T203608+0800_pm_scope_clean_final_15m/slot_controller/expat_scope_clean_final/continuation_001/stdout.log",
+      "seed_task_ids_from_logs": [
+        "bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9",
+        "bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9",
+        "bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9",
+        "bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9"
+      ],
+      "eligible_pool_sizes_from_logs": [
+        25,
+        25,
+        25,
+        25
+      ],
+      "seed_modes_from_logs": [
+        "SEED_INIT",
+        "SEED_EXPLORE",
+        "SEED_EXPLORE",
+        "SEED_EXPLORE"
+      ],
+      "primary_targets_from_logs": [
+        "InitializeParser",
+        "InitializeParser",
+        "unsignedCharToPrintable",
+        "DEFINE_TEXT_PROTO_FUZZER",
+        "None",
+        "XML_SetAttlistDeclHandler",
+        "XML_SetCdataSectionHandler",
+        "XML_SetCharacterDataHandler",
+        "None",
+        "XML_SetCommentHandler",
+        "XML_SetDefaultHandlerExpand",
+        "XML_SetDoctypeDeclHandler",
+        "None"
+      ],
+      "latest_non_none_primary_target": "XML_SetDoctypeDeclHandler",
+      "grep_clean": false,
+      "grep_hits_count": 337,
+      "grep_hits_sample": [
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/coverage_to_selector_bridge_manifest.json",
+          "line": 11,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "      \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/coverage_to_selector_bridge_manifest.json",
+          "line": 24,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "      \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/coverage_to_selector_bridge_manifest.json",
+          "line": 37,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "      \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/coverage_to_selector_bridge_manifest.json",
+          "line": 50,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "      \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/coverage_to_selector_bridge_manifest.json",
+          "line": 63,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "      \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/coverage_to_selector_bridge_manifest.json",
+          "line": 76,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "      \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/coverage_to_selector_bridge_manifest.json",
+          "line": 89,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "      \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/coverage_to_selector_bridge_manifest.json",
+          "line": 102,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "      \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/coverage_to_selector_bridge_manifest.json",
+          "line": 115,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "      \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/coverage_to_selector_bridge_manifest.json",
+          "line": 128,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "      \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/coverage_to_selector_bridge_manifest.json",
+          "line": 141,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "      \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/coverage_to_selector_bridge_manifest.json",
+          "line": 154,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "      \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/coverage_to_selector_bridge_manifest.json",
+          "line": 167,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "      \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/coverage_to_selector_bridge_manifest.json",
+          "line": 180,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "      \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/coverage_to_selector_bridge_manifest.json",
+          "line": 193,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "      \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/coverage_to_selector_bridge_manifest.json",
+          "line": 206,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "      \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/coverage_to_selector_bridge_manifest.json",
+          "line": 219,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "      \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/coverage_to_selector_bridge_manifest.json",
+          "line": 232,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "      \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/coverage_to_selector_bridge_manifest.json",
+          "line": 245,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "      \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/coverage_to_selector_bridge_manifest.json",
+          "line": 258,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "      \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/coverage_to_selector_bridge_manifest.json",
+          "line": 271,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "      \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/coverage_to_selector_bridge_manifest.json",
+          "line": 284,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "      \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/coverage_to_selector_bridge_manifest.json",
+          "line": 297,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "      \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/coverage_to_selector_bridge_manifest.json",
+          "line": 310,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "      \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/function_selector_manifest.json",
+          "line": 83,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "      \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/function_selector_manifest.json",
+          "line": 96,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "      \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/function_selector_manifest.json",
+          "line": 109,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "      \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/function_selector_manifest.json",
+          "line": 122,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "      \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/function_selector_manifest.json",
+          "line": 135,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "      \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/function_selector_manifest.json",
+          "line": 148,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "      \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/function_selector_manifest.json",
+          "line": 161,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "      \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/function_selector_manifest.json",
+          "line": 174,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "      \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/function_selector_manifest.json",
+          "line": 187,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "      \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/function_selector_manifest.json",
+          "line": 200,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "      \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/function_selector_manifest.json",
+          "line": 213,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "      \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/function_selector_manifest.json",
+          "line": 226,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "      \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/function_selector_manifest.json",
+          "line": 239,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "      \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/function_selector_manifest.json",
+          "line": 252,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "      \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/function_selector_manifest.json",
+          "line": 265,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "      \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/function_selector_manifest.json",
+          "line": 278,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "      \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/function_selector_manifest.json",
+          "line": 291,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "      \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/function_selector_manifest.json",
+          "line": 304,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "      \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/function_selector_manifest.json",
+          "line": 317,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "      \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/function_selector_manifest.json",
+          "line": 330,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "      \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/function_selector_manifest.json",
+          "line": 343,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "      \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/function_selector_manifest.json",
+          "line": 356,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "      \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/function_selector_manifest.json",
+          "line": 369,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "      \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/function_selector_manifest.json",
+          "line": 382,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "      \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/function_selector_manifest.json",
+          "line": 402,
+          "keywords": [
+            "fuzzerCellArea"
+          ],
+          "line_preview": "    \"campaign_reseed_target:fuzzerCellArea\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/function_selector_manifest.json",
+          "line": 403,
+          "keywords": [
+            "geoToStringDegs"
+          ],
+          "line_preview": "    \"campaign_reseed_target:geoToStringDegs\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/function_selector_manifest.json",
+          "line": 585,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "          \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/function_selector_manifest.json",
+          "line": 598,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "          \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/function_selector_manifest.json",
+          "line": 611,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "          \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/function_selector_manifest.json",
+          "line": 627,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "        \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/function_selector_manifest.json",
+          "line": 687,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "        \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/function_selector_manifest.json",
+          "line": 830,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "        \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/function_selector_manifest.json",
+          "line": 894,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "        \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/function_selector_manifest.json",
+          "line": 1004,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "      \"xmlparse.c:appendAttributeValue\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/function_selector_manifest.json",
+          "line": 1005,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "      \"xmlparse.c:doCdataSection\""
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/function_selector_manifest.json",
+          "line": 1989,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "        \"name\": \"xmlparse.c:appendAttributeValue\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/function_selector_manifest.json",
+          "line": 2002,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "        \"name\": \"xmlparse.c:doCdataSection\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/function_selector_manifest.json",
+          "line": 3000,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "            \"xmlparse.c:appendAttributeValue\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/function_selector_manifest.json",
+          "line": 3001,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "            \"xmlparse.c:doCdataSection\""
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/function_selector_manifest.json",
+          "line": 3018,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "              \"name\": \"xmlparse.c:appendAttributeValue\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/function_selector_manifest.json",
+          "line": 3031,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "              \"name\": \"xmlparse.c:doCdataSection\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/function_selector_manifest_run1.json",
+          "line": 356,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "          \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/function_selector_manifest_run1.json",
+          "line": 370,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "          \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/function_selector_manifest_run1.json",
+          "line": 384,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "          \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/function_selector_manifest_run1.json",
+          "line": 401,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "        \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/function_selector_manifest_run1.json",
+          "line": 461,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "        \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/function_selector_manifest_run1.json",
+          "line": 604,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "        \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/function_selector_manifest_run1.json",
+          "line": 668,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "        \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/function_selector_manifest_run2.json",
+          "line": 356,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "          \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/function_selector_manifest_run2.json",
+          "line": 370,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "          \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/function_selector_manifest_run2.json",
+          "line": 384,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "          \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/function_selector_manifest_run2.json",
+          "line": 401,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "        \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/function_selector_manifest_run2.json",
+          "line": 461,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "        \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/function_selector_manifest_run2.json",
+          "line": 604,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "        \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/function_selector_manifest_run2.json",
+          "line": 668,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "        \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        },
+        {
+          "path": "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/function_selector_manifest_run3.json",
+          "line": 356,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "          \"file\": \"/home/buttercup2/Project/buttercup-lite/data/tasks/ae9ca388-c0ff-454d-be2a-ad9e8c007f84/src/expat/lib/xmlparse.c\","
+        }
+      ],
+      "file_keyword_hits": {
+        "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/coverage_to_selector_bridge_manifest.json": [
+          "xmlparse.c"
+        ],
+        "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/function_selector_manifest.json": [
+          "geoToStringDegs",
+          "fuzzerCellArea",
+          "xmlparse.c"
+        ],
+        "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/function_selector_manifest_run1.json": [
+          "xmlparse.c"
+        ],
+        "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/function_selector_manifest_run2.json": [
+          "xmlparse.c"
+        ],
+        "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/function_selector_manifest_run3.json": [
+          "xmlparse.c"
+        ],
+        "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/function_selector_manifest_run4.json": [
+          "xmlparse.c"
+        ],
+        "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/harness_selector_manifest.json": [
+          "geoToStringDegs",
+          "fuzzerCellArea",
+          "xmlparse.c"
+        ],
+        "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/harness_selector_manifest_run1.json": [
+          "xmlparse.c"
+        ],
+        "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/harness_selector_manifest_run2.json": [
+          "xmlparse.c"
+        ],
+        "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/harness_selector_manifest_run3.json": [
+          "xmlparse.c"
+        ],
+        "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/harness_selector_manifest_run4.json": [
+          "xmlparse.c"
+        ],
+        "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/seed_family_plan_manifest.json": [
+          "geoToStringDegs",
+          "fuzzerCellArea",
+          "xmlparse.c"
+        ],
+        "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/seed_init_chain_manifest.json": [
+          "geoToStringDegs",
+          "fuzzerCellArea",
+          "xmlparse.c"
+        ],
+        "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/seed_init_chain_manifest_run1.json": [
+          "xmlparse.c"
+        ],
+        "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/seed_init_chain_manifest_run2.json": [
+          "xmlparse.c"
+        ],
+        "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/seed_init_chain_manifest_run3.json": [
+          "xmlparse.c"
+        ],
+        "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/seed_init_chain_manifest_run4.json": [
+          "xmlparse.c"
+        ],
+        "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/seed_manifest.json": [
+          "geoToStringDegs",
+          "fuzzerCellArea",
+          "xmlparse.c"
+        ],
+        "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/seed_manifest.pre_reseed.json": [
+          "xmlparse.c"
+        ],
+        "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/seed_manifest_run1.json": [
+          "xmlparse.c"
+        ],
+        "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/seed_manifest_run2.json": [
+          "xmlparse.c"
+        ],
+        "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/seed_manifest_run3.json": [
+          "xmlparse.c"
+        ],
+        "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/seed_manifest_run4.json": [
+          "xmlparse.c"
+        ],
+        "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/seed_task_manifest.json": [
+          "geoToStringDegs",
+          "fuzzerCellArea",
+          "xmlparse.c"
+        ],
+        "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/seed_task_manifest.pre_reseed.json": [
+          "xmlparse.c"
+        ],
+        "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/seed_task_manifest_run1.json": [
+          "xmlparse.c"
+        ],
+        "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/seed_task_manifest_run2.json": [
+          "xmlparse.c"
+        ],
+        "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/seed_task_manifest_run3.json": [
+          "xmlparse.c"
+        ],
+        "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/seed_task_manifest_run4.json": [
+          "xmlparse.c"
+        ],
+        "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/selector_feedback_consumption.json": [
+          "xmlparse.c"
+        ],
+        "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/weighted_function_selector_manifest.json": [
+          "geoToStringDegs",
+          "fuzzerCellArea",
+          "xmlparse.c"
+        ],
+        "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/weighted_harness_selector_manifest.json": [
+          "geoToStringDegs",
+          "fuzzerCellArea",
+          "xmlparse.c"
+        ]
+      },
+      "field_hits": {
+        "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/function_selector_manifest.json": [
+          {
+            "path": "$.selection_rationale[7]",
+            "keywords": [
+              "fuzzerCellArea"
+            ],
+            "value_preview": "campaign_reseed_target:fuzzerCellArea"
+          },
+          {
+            "path": "$.selection_rationale[8]",
+            "keywords": [
+              "geoToStringDegs"
+            ],
+            "value_preview": "campaign_reseed_target:geoToStringDegs"
+          },
+          {
+            "path": "$.coverage_query_evidence.campaign_reseed_targets[7]",
+            "keywords": [
+              "xmlparse.c:appendAttributeValue"
+            ],
+            "value_preview": "xmlparse.c:appendAttributeValue"
+          },
+          {
+            "path": "$.coverage_query_evidence.campaign_reseed_targets[8]",
+            "keywords": [
+              "xmlparse.c:doCdataSection"
+            ],
+            "value_preview": "xmlparse.c:doCdataSection"
+          },
+          {
+            "path": "$.coverage_query_evidence.campaign_reseed_target_entries[7].name",
+            "keywords": [
+              "xmlparse.c:appendAttributeValue"
+            ],
+            "value_preview": "xmlparse.c:appendAttributeValue"
+          },
+          {
+            "path": "$.coverage_query_evidence.campaign_reseed_target_entries[8].name",
+            "keywords": [
+              "xmlparse.c:doCdataSection"
+            ],
+            "value_preview": "xmlparse.c:doCdataSection"
+          },
+          {
+            "path": "$.coverage_query_evidence.coverage_exploration_contract.target_groups[2].target_names[1]",
+            "keywords": [
+              "xmlparse.c:appendAttributeValue"
+            ],
+            "value_preview": "xmlparse.c:appendAttributeValue"
+          },
+          {
+            "path": "$.coverage_query_evidence.coverage_exploration_contract.target_groups[2].target_names[2]",
+            "keywords": [
+              "xmlparse.c:doCdataSection"
+            ],
+            "value_preview": "xmlparse.c:doCdataSection"
+          },
+          {
+            "path": "$.coverage_query_evidence.coverage_exploration_contract.target_groups[2].target_entries[1].name",
+            "keywords": [
+              "xmlparse.c:appendAttributeValue"
+            ],
+            "value_preview": "xmlparse.c:appendAttributeValue"
+          },
+          {
+            "path": "$.coverage_query_evidence.coverage_exploration_contract.target_groups[2].target_entries[2].name",
+            "keywords": [
+              "xmlparse.c:doCdataSection"
+            ],
+            "value_preview": "xmlparse.c:doCdataSection"
+          }
+        ],
+        "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/harness_selector_manifest.json": [
+          {
+            "path": "$.selection_rationale[7]",
+            "keywords": [
+              "fuzzerCellArea"
+            ],
+            "value_preview": "campaign_reseed_target:fuzzerCellArea"
+          },
+          {
+            "path": "$.selection_rationale[8]",
+            "keywords": [
+              "geoToStringDegs"
+            ],
+            "value_preview": "campaign_reseed_target:geoToStringDegs"
+          }
+        ],
+        "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/seed_family_plan_manifest.json": [
+          {
+            "path": "$.selection_rationale[7]",
+            "keywords": [
+              "fuzzerCellArea"
+            ],
+            "value_preview": "campaign_reseed_target:fuzzerCellArea"
+          },
+          {
+            "path": "$.selection_rationale[8]",
+            "keywords": [
+              "geoToStringDegs"
+            ],
+            "value_preview": "campaign_reseed_target:geoToStringDegs"
+          },
+          {
+            "path": "$.coverage_target_names[7]",
+            "keywords": [
+              "xmlparse.c:appendAttributeValue"
+            ],
+            "value_preview": "xmlparse.c:appendAttributeValue"
+          }
+        ],
+        "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/seed_init_chain_manifest.json": [
+          {
+            "path": "$.lite_chain.get_context.selection_rationale[7]",
+            "keywords": [
+              "fuzzerCellArea"
+            ],
+            "value_preview": "campaign_reseed_target:fuzzerCellArea"
+          },
+          {
+            "path": "$.lite_chain.get_context.selection_rationale[8]",
+            "keywords": [
+              "geoToStringDegs"
+            ],
+            "value_preview": "campaign_reseed_target:geoToStringDegs"
+          }
+        ],
+        "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/seed_manifest.json": [
+          {
+            "path": "$.context_selection_rationale[7]",
+            "keywords": [
+              "fuzzerCellArea"
+            ],
+            "value_preview": "campaign_reseed_target:fuzzerCellArea"
+          },
+          {
+            "path": "$.context_selection_rationale[8]",
+            "keywords": [
+              "geoToStringDegs"
+            ],
+            "value_preview": "campaign_reseed_target:geoToStringDegs"
+          },
+          {
+            "path": "$.coverage_target_entries[7].name",
+            "keywords": [
+              "xmlparse.c:appendAttributeValue"
+            ],
+            "value_preview": "xmlparse.c:appendAttributeValue"
+          },
+          {
+            "path": "$.coverage_target_entries[8].name",
+            "keywords": [
+              "xmlparse.c:doCdataSection"
+            ],
+            "value_preview": "xmlparse.c:doCdataSection"
+          }
+        ],
+        "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/seed_task_manifest.json": [
+          {
+            "path": "$.feedback_input.context_selection_rationale[7]",
+            "keywords": [
+              "fuzzerCellArea"
+            ],
+            "value_preview": "campaign_reseed_target:fuzzerCellArea"
+          },
+          {
+            "path": "$.feedback_input.context_selection_rationale[8]",
+            "keywords": [
+              "geoToStringDegs"
+            ],
+            "value_preview": "campaign_reseed_target:geoToStringDegs"
+          },
+          {
+            "path": "$.seed_family_plan.selection_rationale[7]",
+            "keywords": [
+              "fuzzerCellArea"
+            ],
+            "value_preview": "campaign_reseed_target:fuzzerCellArea"
+          },
+          {
+            "path": "$.seed_family_plan.selection_rationale[8]",
+            "keywords": [
+              "geoToStringDegs"
+            ],
+            "value_preview": "campaign_reseed_target:geoToStringDegs"
+          },
+          {
+            "path": "$.seed_family_plan.coverage_target_names[7]",
+            "keywords": [
+              "xmlparse.c:appendAttributeValue"
+            ],
+            "value_preview": "xmlparse.c:appendAttributeValue"
+          }
+        ],
+        "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/weighted_function_selector_manifest.json": [
+          {
+            "path": "$.selection_rationale[7]",
+            "keywords": [
+              "fuzzerCellArea"
+            ],
+            "value_preview": "campaign_reseed_target:fuzzerCellArea"
+          },
+          {
+            "path": "$.selection_rationale[8]",
+            "keywords": [
+              "geoToStringDegs"
+            ],
+            "value_preview": "campaign_reseed_target:geoToStringDegs"
+          }
+        ],
+        "data/tasks/bafc5029-f0d5-4e66-aa5e-51f5dba5d3f9/seed/weighted_harness_selector_manifest.json": [
+          {
+            "path": "$.selection_rationale[7]",
+            "keywords": [
+              "fuzzerCellArea"
+            ],
+            "value_preview": "campaign_reseed_target:fuzzerCellArea"
+          },
+          {
+            "path": "$.selection_rationale[8]",
+            "keywords": [
+              "geoToStringDegs"
+            ],
+            "value_preview": "campaign_reseed_target:geoToStringDegs"
+          }
+        ]
+      }
+    },
+    "cjson_source": {
+      "seed_task_id": "fe91d3d9-cc0a-487c-80eb-a402c58f66b0",
+      "seed_root": "/home/buttercup2/Project/buttercup-lite/data/tasks/fe91d3d9-cc0a-487c-80eb-a402c58f66b0/seed",
+      "log_path": "/home/buttercup2/Project/buttercup-lite/runtime/proof_runs/20260427T203608+0800_pm_scope_clean_final_15m/slot_controller/cjson_scope_clean_final/continuation_001/stdout.log",
+      "seed_task_ids_from_logs": [
+        "fe91d3d9-cc0a-487c-80eb-a402c58f66b0",
+        "fe91d3d9-cc0a-487c-80eb-a402c58f66b0",
+        "fe91d3d9-cc0a-487c-80eb-a402c58f66b0"
+      ],
+      "eligible_pool_sizes_from_logs": [
+        27,
+        27,
+        27
+      ],
+      "seed_modes_from_logs": [
+        "SEED_INIT",
+        "VULN_DISCOVERY",
+        "VULN_DISCOVERY"
+      ],
+      "primary_targets_from_logs": [
+        "cJSON_ParseWithOpts",
+        "cJSON_ParseWithOpts",
+        "cJSON_ParseWithOpts"
+      ],
+      "latest_non_none_primary_target": "cJSON_ParseWithOpts",
+      "grep_clean": false,
+      "grep_hits_count": 25,
+      "grep_hits_sample": [
+        {
+          "path": "data/tasks/fe91d3d9-cc0a-487c-80eb-a402c58f66b0/seed/coverage_to_selector_bridge_manifest.json",
+          "line": 10,
+          "keywords": [
+            "Copyright"
+          ],
+          "line_preview": "      \"name\": \"Copyright\","
+        },
+        {
+          "path": "data/tasks/fe91d3d9-cc0a-487c-80eb-a402c58f66b0/seed/function_selector_manifest.json",
+          "line": 21,
+          "keywords": [
+            "Copyright"
+          ],
+          "line_preview": "      \"Copyright\","
+        },
+        {
+          "path": "data/tasks/fe91d3d9-cc0a-487c-80eb-a402c58f66b0/seed/function_selector_manifest.json",
+          "line": 33,
+          "keywords": [
+            "Copyright"
+          ],
+          "line_preview": "      \"name\": \"Copyright\","
+        },
+        {
+          "path": "data/tasks/fe91d3d9-cc0a-487c-80eb-a402c58f66b0/seed/function_selector_manifest.json",
+          "line": 495,
+          "keywords": [
+            "Copyright"
+          ],
+          "line_preview": "            \"Copyright\","
+        },
+        {
+          "path": "data/tasks/fe91d3d9-cc0a-487c-80eb-a402c58f66b0/seed/function_selector_manifest_run1.json",
+          "line": 21,
+          "keywords": [
+            "Copyright"
+          ],
+          "line_preview": "      \"Copyright\","
+        },
+        {
+          "path": "data/tasks/fe91d3d9-cc0a-487c-80eb-a402c58f66b0/seed/function_selector_manifest_run1.json",
+          "line": 195,
+          "keywords": [
+            "Copyright"
+          ],
+          "line_preview": "            \"Copyright\","
+        },
+        {
+          "path": "data/tasks/fe91d3d9-cc0a-487c-80eb-a402c58f66b0/seed/function_selector_manifest_run1.json",
+          "line": 219,
+          "keywords": [
+            "Copyright"
+          ],
+          "line_preview": "            \"Copyright\","
+        },
+        {
+          "path": "data/tasks/fe91d3d9-cc0a-487c-80eb-a402c58f66b0/seed/function_selector_manifest_run1.json",
+          "line": 243,
+          "keywords": [
+            "Copyright"
+          ],
+          "line_preview": "            \"Copyright\","
+        },
+        {
+          "path": "data/tasks/fe91d3d9-cc0a-487c-80eb-a402c58f66b0/seed/seed_family_plan_manifest.json",
+          "line": 7,
+          "keywords": [
+            "Copyright"
+          ],
+          "line_preview": "    \"Copyright\","
+        },
+        {
+          "path": "data/tasks/fe91d3d9-cc0a-487c-80eb-a402c58f66b0/seed/seed_family_plan_manifest.json",
+          "line": 63,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "    \"xmlparse.c:appendAttributeValue\","
+        },
+        {
+          "path": "data/tasks/fe91d3d9-cc0a-487c-80eb-a402c58f66b0/seed/seed_family_plan_manifest.json",
+          "line": 64,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "    \"xmlparse.c:doCdataSection\""
+        },
+        {
+          "path": "data/tasks/fe91d3d9-cc0a-487c-80eb-a402c58f66b0/seed/seed_init_chain_manifest.json",
+          "line": 36,
+          "keywords": [
+            "Copyright"
+          ],
+          "line_preview": "          \"name\": \"Copyright\","
+        },
+        {
+          "path": "data/tasks/fe91d3d9-cc0a-487c-80eb-a402c58f66b0/seed/seed_init_chain_manifest.json",
+          "line": 626,
+          "keywords": [
+            "Copyright"
+          ],
+          "line_preview": "              \"name\": \"Copyright\","
+        },
+        {
+          "path": "data/tasks/fe91d3d9-cc0a-487c-80eb-a402c58f66b0/seed/seed_manifest.json",
+          "line": 120,
+          "keywords": [
+            "Copyright"
+          ],
+          "line_preview": "      \"name\": \"Copyright\","
+        },
+        {
+          "path": "data/tasks/fe91d3d9-cc0a-487c-80eb-a402c58f66b0/seed/seed_manifest.json",
+          "line": 575,
+          "keywords": [
+            "Copyright"
+          ],
+          "line_preview": "          \"name\": \"Copyright\","
+        },
+        {
+          "path": "data/tasks/fe91d3d9-cc0a-487c-80eb-a402c58f66b0/seed/seed_manifest.json",
+          "line": 1067,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "      \"name\": \"xmlparse.c:appendAttributeValue\","
+        },
+        {
+          "path": "data/tasks/fe91d3d9-cc0a-487c-80eb-a402c58f66b0/seed/seed_manifest.json",
+          "line": 1085,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "      \"name\": \"xmlparse.c:doCdataSection\","
+        },
+        {
+          "path": "data/tasks/fe91d3d9-cc0a-487c-80eb-a402c58f66b0/seed/seed_task_manifest.json",
+          "line": 35,
+          "keywords": [
+            "Copyright"
+          ],
+          "line_preview": "      \"name\": \"Copyright\","
+        },
+        {
+          "path": "data/tasks/fe91d3d9-cc0a-487c-80eb-a402c58f66b0/seed/seed_task_manifest.json",
+          "line": 508,
+          "keywords": [
+            "Copyright"
+          ],
+          "line_preview": "            \"name\": \"Copyright\","
+        },
+        {
+          "path": "data/tasks/fe91d3d9-cc0a-487c-80eb-a402c58f66b0/seed/seed_task_manifest.json",
+          "line": 580,
+          "keywords": [
+            "Copyright"
+          ],
+          "line_preview": "      \"Copyright\","
+        },
+        {
+          "path": "data/tasks/fe91d3d9-cc0a-487c-80eb-a402c58f66b0/seed/seed_task_manifest.json",
+          "line": 636,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "      \"xmlparse.c:appendAttributeValue\","
+        },
+        {
+          "path": "data/tasks/fe91d3d9-cc0a-487c-80eb-a402c58f66b0/seed/seed_task_manifest.json",
+          "line": 637,
+          "keywords": [
+            "xmlparse.c"
+          ],
+          "line_preview": "      \"xmlparse.c:doCdataSection\""
+        },
+        {
+          "path": "data/tasks/fe91d3d9-cc0a-487c-80eb-a402c58f66b0/seed/selector_feedback_consumption.json",
+          "line": 16,
+          "keywords": [
+            "Copyright"
+          ],
+          "line_preview": "        \"name\": \"Copyright\","
+        },
+        {
+          "path": "data/tasks/fe91d3d9-cc0a-487c-80eb-a402c58f66b0/seed/weighted_function_selector_manifest.json",
+          "line": 21,
+          "keywords": [
+            "Copyright"
+          ],
+          "line_preview": "      \"Copyright\","
+        },
+        {
+          "path": "data/tasks/fe91d3d9-cc0a-487c-80eb-a402c58f66b0/seed/weighted_function_selector_manifest.json",
+          "line": 33,
+          "keywords": [
+            "Copyright"
+          ],
+          "line_preview": "      \"name\": \"Copyright\","
+        }
+      ],
+      "file_keyword_hits": {
+        "data/tasks/fe91d3d9-cc0a-487c-80eb-a402c58f66b0/seed/coverage_to_selector_bridge_manifest.json": [
+          "Copyright"
+        ],
+        "data/tasks/fe91d3d9-cc0a-487c-80eb-a402c58f66b0/seed/function_selector_manifest.json": [
+          "Copyright"
+        ],
+        "data/tasks/fe91d3d9-cc0a-487c-80eb-a402c58f66b0/seed/function_selector_manifest_run1.json": [
+          "Copyright"
+        ],
+        "data/tasks/fe91d3d9-cc0a-487c-80eb-a402c58f66b0/seed/seed_family_plan_manifest.json": [
+          "xmlparse.c",
+          "Copyright"
+        ],
+        "data/tasks/fe91d3d9-cc0a-487c-80eb-a402c58f66b0/seed/seed_init_chain_manifest.json": [
+          "Copyright"
+        ],
+        "data/tasks/fe91d3d9-cc0a-487c-80eb-a402c58f66b0/seed/seed_manifest.json": [
+          "xmlparse.c",
+          "Copyright"
+        ],
+        "data/tasks/fe91d3d9-cc0a-487c-80eb-a402c58f66b0/seed/seed_task_manifest.json": [
+          "xmlparse.c",
+          "Copyright"
+        ],
+        "data/tasks/fe91d3d9-cc0a-487c-80eb-a402c58f66b0/seed/selector_feedback_consumption.json": [
+          "Copyright"
+        ],
+        "data/tasks/fe91d3d9-cc0a-487c-80eb-a402c58f66b0/seed/weighted_function_selector_manifest.json": [
+          "Copyright"
+        ]
+      },
+      "field_hits": {
+        "data/tasks/fe91d3d9-cc0a-487c-80eb-a402c58f66b0/seed/coverage_to_selector_bridge_manifest.json": [
+          {
+            "path": "$.selected_target_functions[0].name",
+            "keywords": [
+              "Copyright"
+            ],
+            "value_preview": "Copyright"
+          }
+        ],
+        "data/tasks/fe91d3d9-cc0a-487c-80eb-a402c58f66b0/seed/function_selector_manifest.json": [
+          {
+            "path": "$.selected_target_function.callers[3]",
+            "keywords": [
+              "Copyright"
+            ],
+            "value_preview": "Copyright"
+          },
+          {
+            "path": "$.selected_target_functions[0].name",
+            "keywords": [
+              "Copyright"
+            ],
+            "value_preview": "Copyright"
+          },
+          {
+            "path": "$.coverage_query_evidence.query_examples.get_functions[0].callers[3]",
+            "keywords": [
+              "Copyright"
+            ],
+            "value_preview": "Copyright"
+          }
+        ],
+        "data/tasks/fe91d3d9-cc0a-487c-80eb-a402c58f66b0/seed/function_selector_manifest_run1.json": [
+          {
+            "path": "$.selected_target_function.callers[3]",
+            "keywords": [
+              "Copyright"
+            ],
+            "value_preview": "Copyright"
+          },
+          {
+            "path": "$.coverage_query_evidence.query_examples.get_functions[0].callers[3]",
+            "keywords": [
+              "Copyright"
+            ],
+            "value_preview": "Copyright"
+          },
+          {
+            "path": "$.coverage_query_evidence.query_examples.get_functions[1].callers[3]",
+            "keywords": [
+              "Copyright"
+            ],
+            "value_preview": "Copyright"
+          },
+          {
+            "path": "$.coverage_query_evidence.query_examples.get_functions[2].callers[3]",
+            "keywords": [
+              "Copyright"
+            ],
+            "value_preview": "Copyright"
+          }
+        ],
+        "data/tasks/fe91d3d9-cc0a-487c-80eb-a402c58f66b0/seed/seed_family_plan_manifest.json": [
+          {
+            "path": "$.selected_target_functions[0]",
+            "keywords": [
+              "Copyright"
+            ],
+            "value_preview": "Copyright"
+          },
+          {
+            "path": "$.coverage_target_names[6]",
+            "keywords": [
+              "xmlparse.c:appendAttributeValue"
+            ],
+            "value_preview": "xmlparse.c:appendAttributeValue"
+          },
+          {
+            "path": "$.coverage_target_names[7]",
+            "keywords": [
+              "xmlparse.c:doCdataSection"
+            ],
+            "value_preview": "xmlparse.c:doCdataSection"
+          }
+        ],
+        "data/tasks/fe91d3d9-cc0a-487c-80eb-a402c58f66b0/seed/seed_init_chain_manifest.json": [
+          {
+            "path": "$.lite_chain.get_context.selected_target_functions[0].name",
+            "keywords": [
+              "Copyright"
+            ],
+            "value_preview": "Copyright"
+          },
+          {
+            "path": "$.lite_chain.generate_seeds.coverage_request_batches[0].selected_target_functions[1].name",
+            "keywords": [
+              "Copyright"
+            ],
+            "value_preview": "Copyright"
+          }
+        ],
+        "data/tasks/fe91d3d9-cc0a-487c-80eb-a402c58f66b0/seed/seed_manifest.json": [
+          {
+            "path": "$.selected_target_functions[0].name",
+            "keywords": [
+              "Copyright"
+            ],
+            "value_preview": "Copyright"
+          },
+          {
+            "path": "$.coverage_request_batches[0].selected_target_functions[1].name",
+            "keywords": [
+              "Copyright"
+            ],
+            "value_preview": "Copyright"
+          },
+          {
+            "path": "$.coverage_target_entries[6].name",
+            "keywords": [
+              "xmlparse.c:appendAttributeValue"
+            ],
+            "value_preview": "xmlparse.c:appendAttributeValue"
+          },
+          {
+            "path": "$.coverage_target_entries[7].name",
+            "keywords": [
+              "xmlparse.c:doCdataSection"
+            ],
+            "value_preview": "xmlparse.c:doCdataSection"
+          }
+        ],
+        "data/tasks/fe91d3d9-cc0a-487c-80eb-a402c58f66b0/seed/seed_task_manifest.json": [
+          {
+            "path": "$.selected_target_functions[0].name",
+            "keywords": [
+              "Copyright"
+            ],
+            "value_preview": "Copyright"
+          },
+          {
+            "path": "$.feedback_input.coverage_request_batches[0].selected_target_functions[1].name",
+            "keywords": [
+              "Copyright"
+            ],
+            "value_preview": "Copyright"
+          },
+          {
+            "path": "$.seed_family_plan.selected_target_functions[0]",
+            "keywords": [
+              "Copyright"
+            ],
+            "value_preview": "Copyright"
+          },
+          {
+            "path": "$.seed_family_plan.coverage_target_names[6]",
+            "keywords": [
+              "xmlparse.c:appendAttributeValue"
+            ],
+            "value_preview": "xmlparse.c:appendAttributeValue"
+          },
+          {
+            "path": "$.seed_family_plan.coverage_target_names[7]",
+            "keywords": [
+              "xmlparse.c:doCdataSection"
+            ],
+            "value_preview": "xmlparse.c:doCdataSection"
+          }
+        ],
+        "data/tasks/fe91d3d9-cc0a-487c-80eb-a402c58f66b0/seed/selector_feedback_consumption.json": [
+          {
+            "path": "$.after.selected_target_functions[0].name",
+            "keywords": [
+              "Copyright"
+            ],
+            "value_preview": "Copyright"
+          }
+        ],
+        "data/tasks/fe91d3d9-cc0a-487c-80eb-a402c58f66b0/seed/weighted_function_selector_manifest.json": [
+          {
+            "path": "$.selected_target_function.callers[3]",
+            "keywords": [
+              "Copyright"
+            ],
+            "value_preview": "Copyright"
+          },
+          {
+            "path": "$.selected_target_functions[0].name",
+            "keywords": [
+              "Copyright"
+            ],
+            "value_preview": "Copyright"
+          }
+        ]
+      }
+    }
+  },
+  "acceptance": {
+    "grep_command": "grep -r \"geoToStringDegs|fuzzerCellArea|xmlparse.c|Copyright\" data/tasks/<expat_seed_task>/seed data/tasks/<cjson_seed_task>/seed 2>/dev/null",
+    "overall_grep_clean": false,
+    "eligible_pool_non_zero": true,
+    "primary_targets_project_local_from_logs": {
+      "expat_generalized": [
+        "InitializeParser",
+        "InitializeParser",
+        "unsignedCharToPrintable",
+        "DEFINE_TEXT_PROTO_FUZZER",
+        "None",
+        "XML_SetAttlistDeclHandler",
+        "XML_SetCdataSectionHandler",
+        "XML_SetCharacterDataHandler",
+        "None",
+        "XML_SetCommentHandler",
+        "XML_SetDefaultHandlerExpand",
+        "XML_SetDoctypeDeclHandler",
+        "None"
+      ],
+      "cjson_source": [
+        "cJSON_ParseWithOpts",
+        "cJSON_ParseWithOpts",
+        "cJSON_ParseWithOpts"
+      ]
+    },
+    "result": "failed"
+  },
+  "notes": {
+    "donor_seed_copy_behavior": "campaign round preparation copies donor_root/seed into the new round task before the new seed worker runs, so grep can surface both inherited historical artifacts and newly-written artifacts in the same seed directory.",
+    "expat_xmlparse_caveat": "The literal pattern \"xmlparse.c\" also matches legitimate expat-native symbols and file paths, so expat grep hits must be interpreted together with geoToStringDegs/fuzzerCellArea and JSON field paths rather than as cross-project leakage by themselves.",
+    "cjson_current_failure_shape": "After the function_selector-only patch, cJSON no longer showed geoToStringDegs/fuzzerCellArea in the new selector artifacts, but Copyright still survives in selected_target_functions as a pm_callers-derived test symbol, and downstream manifests still carry Copyright/xmlparse.c entries."
+  },
+  "honest_conclusion": {
+    "scope_clean": false,
+    "summary": "This 15-minute smoke did not satisfy the strict grep-empty acceptance rule. Eligible pools stayed healthy (expat 25, cJSON 27) and log-level primary targets were project-local, but the new seed task directories still contained matched strings. expat still carried geoToStringDegs/fuzzerCellArea plus many native xmlparse.c paths, and cJSON still carried Copyright in new selector/downstream artifacts."
+  }
+}
