@@ -1,0 +1,259 @@
+{
+  "generated_at": "2026-04-27T11:54:07.355271+00:00",
+  "phase0": {
+    "disk_available_root": "120G",
+    "meets_requirement_ge_100_gib": true
+  },
+  "run": {
+    "run_root": "/home/buttercup2/Project/buttercup-lite/runtime/proof_runs/20260427T193039+0800_pm_scope_final_verification_15m/slot_controller",
+    "slot_started_at": "2026-04-27T11:34:31.355133+00:00",
+    "slot_deadline_at": "2026-04-27T11:49:31.355133+00:00",
+    "finished_at": "2026-04-27T11:49:54.049312+00:00",
+    "totals": {
+      "llm_request_count_total": 3,
+      "llm_success_count": 3,
+      "llm_failure_count": 0,
+      "fuzz_session_count": 3,
+      "harness_switch_count": 0,
+      "reseed_trigger_count": 3,
+      "shared_corpus_growth_count": 517,
+      "family_diversification_trigger_count": 0,
+      "generalized_candidate_bridge_count": 2,
+      "trace_worthy_candidate_count": 2,
+      "trace_exact_signature_count": 2,
+      "loose_cluster_count": 4,
+      "confirmed_family_count": 4,
+      "warmup_prepared_count": 2,
+      "warmup_utilized_count": 1,
+      "slot_switch_latency_count": 1,
+      "slot_switch_latency_seconds_total": 56.045,
+      "api_calls_per_hour": 11.714,
+      "wall_clock_utilization_ratio": 0.9868,
+      "idle_gap_seconds": 95.222,
+      "idle_gap_total_seconds": 95.222,
+      "slot_switch_latency_seconds_avg": 56.045
+    }
+  },
+  "slots": {
+    "expat_generalized": {
+      "campaign_task_ids": [
+        "8a40ff98-c485-49cf-a39e-c8f4120d33a5"
+      ],
+      "seed_task_ids": [
+        "1c7af5d3-027e-4589-8cd5-958c112a13a3",
+        "1c7af5d3-027e-4589-8cd5-958c112a13a3",
+        "1c7af5d3-027e-4589-8cd5-958c112a13a3",
+        "1c7af5d3-027e-4589-8cd5-958c112a13a3",
+        "1c7af5d3-027e-4589-8cd5-958c112a13a3"
+      ],
+      "stdout_log": "/home/buttercup2/Project/buttercup-lite/runtime/proof_runs/20260427T193039+0800_pm_scope_final_verification_15m/slot_controller/expat_scope_final_verification/continuation_001/stdout.log",
+      "eligible_pool_sizes_from_logs": [
+        25,
+        25,
+        25,
+        25,
+        25
+      ],
+      "seed_modes_from_logs": [
+        "SEED_INIT",
+        "SEED_EXPLORE",
+        "SEED_EXPLORE",
+        "SEED_EXPLORE",
+        "SEED_EXPLORE"
+      ],
+      "primary_targets_from_logs": [
+        "InitializeParser",
+        "InitializeParser",
+        "unsignedCharToPrintable",
+        "DEFINE_TEXT_PROTO_FUZZER",
+        "None",
+        "XML_SetAttlistDeclHandler",
+        "XML_SetCdataSectionHandler",
+        "XML_SetCharacterDataHandler",
+        "None",
+        "XML_SetCommentHandler",
+        "XML_SetDefaultHandlerExpand",
+        "XML_SetDoctypeDeclHandler",
+        "None",
+        "XML_SetElementDeclHandler",
+        "XML_SetElementHandler",
+        "XML_SetEntityDeclHandler",
+        "None"
+      ],
+      "grep_command_equivalent": "grep -r 'geoToStringDegs|fuzzerCellArea' data/tasks/1c7af5d3-027e-4589-8cd5-958c112a13a3/seed/",
+      "grep_hits": [
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/1c7af5d3-027e-4589-8cd5-958c112a13a3/seed/function_selector_manifest.json:427:\"campaign_reseed_target:fuzzerCellArea\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/1c7af5d3-027e-4589-8cd5-958c112a13a3/seed/function_selector_manifest.json:428:\"campaign_reseed_target:geoToStringDegs\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/1c7af5d3-027e-4589-8cd5-958c112a13a3/seed/function_selector_manifest.json:1035:\"fuzzerCellArea\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/1c7af5d3-027e-4589-8cd5-958c112a13a3/seed/function_selector_manifest.json:1036:\"geoToStringDegs\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/1c7af5d3-027e-4589-8cd5-958c112a13a3/seed/function_selector_manifest.json:1477:\"name\": \"fuzzerCellArea\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/1c7af5d3-027e-4589-8cd5-958c112a13a3/seed/function_selector_manifest.json:1495:\"name\": \"geoToStringDegs\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/1c7af5d3-027e-4589-8cd5-958c112a13a3/seed/function_selector_manifest.json:1986:\"geoToStringDegs\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/1c7af5d3-027e-4589-8cd5-958c112a13a3/seed/function_selector_manifest.json:1993:\"name\": \"geoToStringDegs\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/1c7af5d3-027e-4589-8cd5-958c112a13a3/seed/function_selector_manifest.json:2503:\"name\": \"fuzzerCellArea\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/1c7af5d3-027e-4589-8cd5-958c112a13a3/seed/function_selector_manifest.json:2521:\"name\": \"geoToStringDegs\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/1c7af5d3-027e-4589-8cd5-958c112a13a3/seed/harness_selector_manifest.json:290:\"campaign_reseed_target:fuzzerCellArea\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/1c7af5d3-027e-4589-8cd5-958c112a13a3/seed/harness_selector_manifest.json:291:\"campaign_reseed_target:geoToStringDegs\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/1c7af5d3-027e-4589-8cd5-958c112a13a3/seed/seed_family_plan_manifest.json:40:\"campaign_reseed_target:fuzzerCellArea\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/1c7af5d3-027e-4589-8cd5-958c112a13a3/seed/seed_family_plan_manifest.json:41:\"campaign_reseed_target:geoToStringDegs\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/1c7af5d3-027e-4589-8cd5-958c112a13a3/seed/seed_init_chain_manifest.json:635:\"campaign_reseed_target:fuzzerCellArea\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/1c7af5d3-027e-4589-8cd5-958c112a13a3/seed/seed_init_chain_manifest.json:636:\"campaign_reseed_target:geoToStringDegs\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/1c7af5d3-027e-4589-8cd5-958c112a13a3/seed/seed_manifest.json:779:\"campaign_reseed_target:fuzzerCellArea\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/1c7af5d3-027e-4589-8cd5-958c112a13a3/seed/seed_manifest.json:780:\"campaign_reseed_target:geoToStringDegs\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/1c7af5d3-027e-4589-8cd5-958c112a13a3/seed/seed_task_manifest.json:718:\"campaign_reseed_target:fuzzerCellArea\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/1c7af5d3-027e-4589-8cd5-958c112a13a3/seed/seed_task_manifest.json:719:\"campaign_reseed_target:geoToStringDegs\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/1c7af5d3-027e-4589-8cd5-958c112a13a3/seed/seed_task_manifest.json:1173:\"campaign_reseed_target:fuzzerCellArea\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/1c7af5d3-027e-4589-8cd5-958c112a13a3/seed/seed_task_manifest.json:1174:\"campaign_reseed_target:geoToStringDegs\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/1c7af5d3-027e-4589-8cd5-958c112a13a3/seed/selector_feedback_consumption.json:9:\"selected_target_function\": \"geoToStringDegs\"",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/1c7af5d3-027e-4589-8cd5-958c112a13a3/seed/weighted_function_selector_manifest.json:766:\"campaign_reseed_target:fuzzerCellArea\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/1c7af5d3-027e-4589-8cd5-958c112a13a3/seed/weighted_function_selector_manifest.json:767:\"campaign_reseed_target:geoToStringDegs\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/1c7af5d3-027e-4589-8cd5-958c112a13a3/seed/weighted_harness_selector_manifest.json:342:\"campaign_reseed_target:fuzzerCellArea\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/1c7af5d3-027e-4589-8cd5-958c112a13a3/seed/weighted_harness_selector_manifest.json:343:\"campaign_reseed_target:geoToStringDegs\","
+      ],
+      "current_scope_failure_examples": {
+        "selection_rationale_hits": [
+          "campaign_reseed_target:fuzzerCellArea",
+          "campaign_reseed_target:geoToStringDegs"
+        ],
+        "note": "expat logs/batch primaries are project-local, but current seed artifacts still retain leaked reseed rationale entries."
+      }
+    },
+    "cjson_source": {
+      "campaign_task_ids": [
+        "75535398-c441-452c-a2b8-0b96b5e0e821",
+        "cc3f0cb2-a0fa-49f9-a0b0-8ad29a9e865c"
+      ],
+      "seed_task_ids": [
+        "a8b9d18b-7b09-4f5c-8f76-d54469475abb",
+        "a8b9d18b-7b09-4f5c-8f76-d54469475abb",
+        "a8b9d18b-7b09-4f5c-8f76-d54469475abb",
+        "3c036de6-596a-4a32-8764-6afa10785558"
+      ],
+      "stdout_logs": [
+        "/home/buttercup2/Project/buttercup-lite/runtime/proof_runs/20260427T193039+0800_pm_scope_final_verification_15m/slot_controller/cjson_scope_final_verification/continuation_001/stdout.log",
+        "/home/buttercup2/Project/buttercup-lite/runtime/proof_runs/20260427T193039+0800_pm_scope_final_verification_15m/slot_controller/cjson_scope_final_verification/continuation_002/stdout.log"
+      ],
+      "eligible_pool_sizes_from_logs": [
+        27,
+        27,
+        27,
+        27
+      ],
+      "seed_modes_from_logs": [
+        "SEED_INIT",
+        "VULN_DISCOVERY",
+        "VULN_DISCOVERY",
+        "SEED_INIT"
+      ],
+      "primary_targets_from_logs": [
+        "cJSON_ParseWithOpts",
+        "cJSON_ParseWithOpts",
+        "cJSON_ParseWithOpts",
+        "cJSON_ParseWithOpts"
+      ],
+      "grep_command_equivalent_continuation_001": "grep -r 'geoToStringDegs|fuzzerCellArea|xmlparse.c|Copyright' data/tasks/a8b9d18b-7b09-4f5c-8f76-d54469475abb/seed/",
+      "grep_hits_continuation_001": [
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/a8b9d18b-7b09-4f5c-8f76-d54469475abb/seed/coverage_to_selector_bridge_manifest.json:11:\"name\": \"Copyright\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/a8b9d18b-7b09-4f5c-8f76-d54469475abb/seed/function_selector_manifest.json:21:\"Copyright\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/a8b9d18b-7b09-4f5c-8f76-d54469475abb/seed/function_selector_manifest.json:35:\"name\": \"Copyright\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/a8b9d18b-7b09-4f5c-8f76-d54469475abb/seed/function_selector_manifest.json:527:\"Copyright\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/a8b9d18b-7b09-4f5c-8f76-d54469475abb/seed/function_selector_manifest.json:602:\"fuzzerCellArea\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/a8b9d18b-7b09-4f5c-8f76-d54469475abb/seed/function_selector_manifest.json:603:\"geoToStringDegs\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/a8b9d18b-7b09-4f5c-8f76-d54469475abb/seed/function_selector_manifest.json:605:\"xmlparse.c:appendAttributeValue\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/a8b9d18b-7b09-4f5c-8f76-d54469475abb/seed/function_selector_manifest.json:606:\"xmlparse.c:doCdataSection\"",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/a8b9d18b-7b09-4f5c-8f76-d54469475abb/seed/function_selector_manifest.json:1068:\"name\": \"fuzzerCellArea\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/a8b9d18b-7b09-4f5c-8f76-d54469475abb/seed/function_selector_manifest.json:1086:\"name\": \"geoToStringDegs\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/a8b9d18b-7b09-4f5c-8f76-d54469475abb/seed/function_selector_manifest.json:1122:\"name\": \"xmlparse.c:appendAttributeValue\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/a8b9d18b-7b09-4f5c-8f76-d54469475abb/seed/function_selector_manifest.json:1140:\"name\": \"xmlparse.c:doCdataSection\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/a8b9d18b-7b09-4f5c-8f76-d54469475abb/seed/function_selector_manifest.json:1505:\"geoToStringDegs\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/a8b9d18b-7b09-4f5c-8f76-d54469475abb/seed/function_selector_manifest.json:1507:\"xmlparse.c:appendAttributeValue\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/a8b9d18b-7b09-4f5c-8f76-d54469475abb/seed/function_selector_manifest.json:1508:\"xmlparse.c:doCdataSection\"",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/a8b9d18b-7b09-4f5c-8f76-d54469475abb/seed/function_selector_manifest.json:1512:\"name\": \"geoToStringDegs\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/a8b9d18b-7b09-4f5c-8f76-d54469475abb/seed/function_selector_manifest.json:1548:\"name\": \"xmlparse.c:appendAttributeValue\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/a8b9d18b-7b09-4f5c-8f76-d54469475abb/seed/function_selector_manifest.json:1566:\"name\": \"xmlparse.c:doCdataSection\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/a8b9d18b-7b09-4f5c-8f76-d54469475abb/seed/function_selector_manifest.json:2046:\"name\": \"fuzzerCellArea\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/a8b9d18b-7b09-4f5c-8f76-d54469475abb/seed/function_selector_manifest_run1.json:21:\"Copyright\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/a8b9d18b-7b09-4f5c-8f76-d54469475abb/seed/function_selector_manifest_run1.json:195:\"Copyright\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/a8b9d18b-7b09-4f5c-8f76-d54469475abb/seed/function_selector_manifest_run1.json:219:\"Copyright\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/a8b9d18b-7b09-4f5c-8f76-d54469475abb/seed/function_selector_manifest_run1.json:243:\"Copyright\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/a8b9d18b-7b09-4f5c-8f76-d54469475abb/seed/seed_family_plan_manifest.json:7:\"Copyright\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/a8b9d18b-7b09-4f5c-8f76-d54469475abb/seed/seed_family_plan_manifest.json:63:\"xmlparse.c:appendAttributeValue\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/a8b9d18b-7b09-4f5c-8f76-d54469475abb/seed/seed_family_plan_manifest.json:64:\"xmlparse.c:doCdataSection\"",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/a8b9d18b-7b09-4f5c-8f76-d54469475abb/seed/seed_init_chain_manifest.json:36:\"name\": \"Copyright\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/a8b9d18b-7b09-4f5c-8f76-d54469475abb/seed/seed_init_chain_manifest.json:626:\"name\": \"Copyright\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/a8b9d18b-7b09-4f5c-8f76-d54469475abb/seed/seed_manifest.json:120:\"name\": \"Copyright\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/a8b9d18b-7b09-4f5c-8f76-d54469475abb/seed/seed_manifest.json:575:\"name\": \"Copyright\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/a8b9d18b-7b09-4f5c-8f76-d54469475abb/seed/seed_manifest.json:1086:\"name\": \"xmlparse.c:appendAttributeValue\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/a8b9d18b-7b09-4f5c-8f76-d54469475abb/seed/seed_manifest.json:1104:\"name\": \"xmlparse.c:doCdataSection\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/a8b9d18b-7b09-4f5c-8f76-d54469475abb/seed/seed_task_manifest.json:35:\"name\": \"Copyright\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/a8b9d18b-7b09-4f5c-8f76-d54469475abb/seed/seed_task_manifest.json:508:\"name\": \"Copyright\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/a8b9d18b-7b09-4f5c-8f76-d54469475abb/seed/seed_task_manifest.json:580:\"Copyright\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/a8b9d18b-7b09-4f5c-8f76-d54469475abb/seed/seed_task_manifest.json:636:\"xmlparse.c:appendAttributeValue\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/a8b9d18b-7b09-4f5c-8f76-d54469475abb/seed/seed_task_manifest.json:637:\"xmlparse.c:doCdataSection\"",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/a8b9d18b-7b09-4f5c-8f76-d54469475abb/seed/selector_feedback_consumption.json:9:\"selected_target_function\": \"geoToStringDegs\"",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/a8b9d18b-7b09-4f5c-8f76-d54469475abb/seed/selector_feedback_consumption.json:17:\"name\": \"Copyright\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/a8b9d18b-7b09-4f5c-8f76-d54469475abb/seed/weighted_function_selector_manifest.json:21:\"Copyright\","
+      ],
+      "grep_command_equivalent_continuation_002": "grep -r 'geoToStringDegs|fuzzerCellArea|xmlparse.c|Copyright' data/tasks/3c036de6-596a-4a32-8764-6afa10785558/seed/",
+      "grep_hits_continuation_002": [
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/3c036de6-596a-4a32-8764-6afa10785558/seed/coverage_to_selector_bridge_manifest.json:11:\"name\": \"Copyright\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/3c036de6-596a-4a32-8764-6afa10785558/seed/function_selector_manifest.json:21:\"Copyright\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/3c036de6-596a-4a32-8764-6afa10785558/seed/function_selector_manifest.json:35:\"name\": \"Copyright\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/3c036de6-596a-4a32-8764-6afa10785558/seed/function_selector_manifest.json:527:\"Copyright\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/3c036de6-596a-4a32-8764-6afa10785558/seed/function_selector_manifest.json:602:\"fuzzerCellArea\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/3c036de6-596a-4a32-8764-6afa10785558/seed/function_selector_manifest.json:604:\"geoToStringDegs\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/3c036de6-596a-4a32-8764-6afa10785558/seed/function_selector_manifest.json:606:\"xmlparse.c:appendAttributeValue\"",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/3c036de6-596a-4a32-8764-6afa10785558/seed/function_selector_manifest.json:1068:\"name\": \"fuzzerCellArea\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/3c036de6-596a-4a32-8764-6afa10785558/seed/function_selector_manifest.json:1104:\"name\": \"geoToStringDegs\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/3c036de6-596a-4a32-8764-6afa10785558/seed/function_selector_manifest.json:1140:\"name\": \"xmlparse.c:appendAttributeValue\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/3c036de6-596a-4a32-8764-6afa10785558/seed/function_selector_manifest.json:1505:\"geoToStringDegs\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/3c036de6-596a-4a32-8764-6afa10785558/seed/function_selector_manifest.json:1507:\"xmlparse.c:appendAttributeValue\"",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/3c036de6-596a-4a32-8764-6afa10785558/seed/function_selector_manifest.json:1511:\"name\": \"geoToStringDegs\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/3c036de6-596a-4a32-8764-6afa10785558/seed/function_selector_manifest.json:1547:\"name\": \"xmlparse.c:appendAttributeValue\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/3c036de6-596a-4a32-8764-6afa10785558/seed/function_selector_manifest.json:2027:\"name\": \"fuzzerCellArea\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/3c036de6-596a-4a32-8764-6afa10785558/seed/function_selector_manifest_run1.json:21:\"Copyright\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/3c036de6-596a-4a32-8764-6afa10785558/seed/function_selector_manifest_run1.json:195:\"Copyright\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/3c036de6-596a-4a32-8764-6afa10785558/seed/function_selector_manifest_run1.json:219:\"Copyright\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/3c036de6-596a-4a32-8764-6afa10785558/seed/function_selector_manifest_run1.json:243:\"Copyright\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/3c036de6-596a-4a32-8764-6afa10785558/seed/seed_family_plan_manifest.json:7:\"Copyright\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/3c036de6-596a-4a32-8764-6afa10785558/seed/seed_family_plan_manifest.json:63:\"xmlparse.c:appendAttributeValue\"",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/3c036de6-596a-4a32-8764-6afa10785558/seed/seed_init_chain_manifest.json:36:\"name\": \"Copyright\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/3c036de6-596a-4a32-8764-6afa10785558/seed/seed_init_chain_manifest.json:626:\"name\": \"Copyright\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/3c036de6-596a-4a32-8764-6afa10785558/seed/selector_feedback_consumption.json:9:\"selected_target_function\": \"geoToStringDegs\"",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/3c036de6-596a-4a32-8764-6afa10785558/seed/selector_feedback_consumption.json:17:\"name\": \"Copyright\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/3c036de6-596a-4a32-8764-6afa10785558/seed/weighted_function_selector_manifest.json:21:\"Copyright\",",
+        "/home/buttercup2/Project/buttercup-lite/data/tasks/3c036de6-596a-4a32-8764-6afa10785558/seed/weighted_function_selector_manifest.json:35:\"name\": \"Copyright\","
+      ],
+      "current_scope_failure_examples": {
+        "selected_target_functions_first_name": "Copyright",
+        "campaign_reseed_target_entries_names_subset": [
+          "fuzzerCellArea",
+          "geoToStringDegs",
+          "xmlparse.c:appendAttributeValue",
+          "xmlparse.c:doCdataSection"
+        ],
+        "coverage_exploration_group_names": [
+          "geoToStringDegs",
+          "unsignedCharToPrintable",
+          "xmlparse.c:appendAttributeValue",
+          "xmlparse.c:doCdataSection"
+        ]
+      }
+    }
+  },
+  "patch_observation": {
+    "patch_attempt_count": 0,
+    "note": "No patch worker or patch attempt evidence appeared in either slot stdout log or task artifacts during this smoke."
+  },
+  "acceptance": {
+    "expat_seed_rotation_no_geoToStringDegs_or_fuzzerCellArea": false,
+    "cjson_seed_rotation_no_xmlparse_or_Copyright": false,
+    "two_slots_eligible_pool_not_zero": true,
+    "eligible_pool_entries_all_project_functions": false,
+    "overall_result": "failed"
+  },
+  "honest_conclusion": {
+    "scope_clean": false,
+    "summary": "This smoke disproved the acceptance claim. Eligible pools stayed healthy (expat 25, cJSON 27), but seed artifacts still contain leaked cross-project names, so the PM scope fix is not yet clean end-to-end."
+  }
+}
